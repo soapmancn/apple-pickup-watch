@@ -1,0 +1,427 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>iPhone 18 Pro Max 深圳库存监控</title>
+  <style>
+    :root {
+      --bg: #0f1115; --card: #181b22; --border: #2a2f3a;
+      --fg: #e7eaf0; --muted: #8a93a6;
+      --ok: #2ecc71; --warn: #f39c12; --bad: #e74c3c; --accent: #6aa9ff;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; color: var(--fg);
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", Arial, sans-serif;
+      background: var(--bg);
+    }
+    header {
+      padding: 20px 28px; border-bottom: 1px solid var(--border);
+      display: flex; align-items: center; justify-content: space-between;
+      gap: 16px; flex-wrap: wrap;
+    }
+    header h1 { margin: 0; font-size: 18px; font-weight: 600; }
+    header .meta { color: var(--muted); font-size: 13px; }
+    code { color: var(--fg); }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; margin-left: 6px; }
+    .badge.ok   { background: rgba(46,204,113,.15);  color: var(--ok); }
+    .badge.bad  { background: rgba(231,76,60,.15);   color: var(--bad); }
+    .badge.idle { background: rgba(138,147,166,.15); color: var(--muted); }
+    main { padding: 24px 28px; }
+    .summary {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 12px; margin-bottom: 24px;
+    }
+    .stat {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 8px; padding: 14px 16px;
+    }
+    .stat .label { color: var(--muted); font-size: 12px; }
+    .stat .value { font-size: 22px; font-weight: 600; margin-top: 4px; }
+    .stat .value.ok  { color: var(--ok); }
+    .stat .value.bad { color: var(--bad); }
+    .grid {
+      display: grid; gap: 16px;
+      grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    }
+    .store {
+      background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .store h3 {
+      margin: 0; padding: 12px 14px; border-bottom: 1px solid var(--border);
+      font-size: 14px; font-weight: 600;
+      display: flex; justify-content: space-between; align-items: center;
+    }
+    .store h3 .count {
+      font-size: 12px; font-weight: 500; padding: 2px 8px; border-radius: 10px;
+    }
+    .store h3 .count.has  { background: rgba(46,204,113,.15);  color: var(--ok); }
+    .store h3 .count.zero { background: rgba(231,76,60,.15);   color: var(--bad); }
+    .store ul { list-style: none; margin: 0; padding: 0; }
+    .store li {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 10px 14px; border-bottom: 1px solid var(--border);
+      font-size: 13px; gap: 8px;
+    }
+    .store li:last-child { border-bottom: none; }
+    .store li.flash { animation: flash 1.2s ease-out 2; }
+    @keyframes flash {
+      0%   { background: rgba(243,156,18,.35); }
+      100% { background: transparent; }
+    }
+    .sku .label { color: var(--fg); }
+    .sku .sub   { color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .status {
+      font-size: 12px; padding: 3px 9px; border-radius: 10px; flex-shrink: 0;
+    }
+    .status.avail   { background: rgba(46,204,113,.18);  color: var(--ok); }
+    .status.unavail { background: rgba(231,76,60,.12);   color: var(--muted); }
+    footer { padding: 14px 28px 28px; color: var(--muted); font-size: 12px; }
+    .toast {
+      position: fixed; right: 16px; bottom: 16px;
+      background: var(--card); border: 1px solid var(--accent);
+      color: var(--fg); padding: 12px 16px; border-radius: 10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,.4);
+      max-width: 360px;
+      transform: translateY(20px); opacity: 0;
+      transition: transform .3s, opacity .3s;
+      pointer-events: none; z-index: 50;
+    }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    .toast .title { font-weight: 600; margin-bottom: 4px; color: var(--accent); }
+    .toast .body  { font-size: 13px; }
+    details.log {
+      margin-top: 20px; background: var(--card);
+      border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
+    }
+    details.log > summary {
+      cursor: pointer; padding: 10px 14px; list-style: none;
+      font-size: 13px; color: var(--muted); user-select: none;
+      display: flex; align-items: center; gap: 8px;
+    }
+    details.log > summary::-webkit-details-marker { display: none; }
+    details.log > summary::before {
+      content: "▸"; transition: transform .15s; display: inline-block;
+    }
+    details.log[open] > summary::before { transform: rotate(90deg); }
+    .log-body {
+      max-height: 280px; overflow-y: auto;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 12px; border-top: 1px solid var(--border);
+    }
+    .log-row {
+      padding: 6px 14px; border-bottom: 1px solid var(--border);
+      display: grid; grid-template-columns: 160px 60px 1fr;
+      gap: 10px; align-items: center;
+    }
+    .log-row:last-child { border-bottom: none; }
+    .log-row .ts { color: var(--muted); }
+    .log-row .badge-cell {
+      font-size: 11px; padding: 2px 8px; border-radius: 10px;
+      display: inline-block; text-align: center;
+    }
+    .log-row.ok   .badge-cell { background: rgba(46,204,113,.15);  color: var(--ok); }
+    .log-row.fail .badge-cell { background: rgba(231,76,60,.15);   color: var(--bad); }
+    .log-row.skip .badge-cell { background: rgba(138,147,166,.15); color: var(--muted); }
+    .log-row .msg { color: var(--fg); }
+    .log-empty   { padding: 14px; color: var(--muted); font-size: 12px; }
+    .conn-state {
+      font-size: 11px; padding: 2px 8px; border-radius: 10px; margin-left: 8px;
+    }
+    .conn-state.on  { background: rgba(46,204,113,.15);  color: var(--ok); }
+    .conn-state.off { background: rgba(231,76,60,.15);   color: var(--bad); }
+  </style>
+</head>
+<body>
+  <header>
+    <div>
+      <h1>
+        iPhone 18 Pro Max · 深圳到店库存
+        <span id="status-badge" class="badge idle">加载中</span>
+        <span id="conn-state" class="conn-state off">未连接</span>
+      </h1>
+      <div class="meta">
+        <span>门店：深圳万象城（R761）/ 深圳益田假日广场（R484）/ 前海壹方城（R793）</span><br>
+        <span>上次更新：<code id="last-check">—</code> · 监控频率：<code id="poll-secs">—</code></span>
+      </div>
+    </div>
+    <div>
+      <button id="enable-btn" style="background:var(--accent);color:#fff;border:none;padding:8px 14px;border-radius:6px;cursor:pointer;font-size:13px;">
+        启用浏览器通知 + 提示音
+      </button>
+    </div>
+  </header>
+
+  <main>
+    <section class="summary">
+      <div class="stat"><div class="label">在售组合</div><div class="value ok" id="stat-avail">—</div></div>
+      <div class="stat"><div class="label">缺货组合</div><div class="value bad" id="stat-miss">—</div></div>
+      <div class="stat"><div class="label">本轮新增</div><div class="value" id="stat-new">0</div></div>
+      <div class="stat"><div class="label">SSE 连接</div><div class="value" id="stat-sse">—</div></div>
+    </section>
+
+    <section class="grid" id="store-grid"></section>
+
+    <details class="log" id="log-panel">
+      <summary>
+        <span>📋 查询日志（最近 <span id="log-count">0</span> 条）</span>
+        <span class="muted" style="font-size:11px; margin-left:auto;">每 5 秒刷新</span>
+      </summary>
+      <div class="log-body" id="log-body">
+        <div class="log-empty">暂无日志</div>
+      </div>
+    </details>
+  </main>
+
+  <footer>
+    数据源：<a style="color:var(--accent)" href="https://www.apple.com.cn/shop/retail/pickup-message" target="_blank">apple.com.cn/shop/retail/pickup-message</a>
+    · 部署在 Cloudflare Workers，全球边缘 IP 轮换
+  </footer>
+
+  <div class="toast" id="toast">
+    <div class="title" id="toast-title">—</div>
+    <div class="body"  id="toast-body">—</div>
+  </div>
+
+  <script>
+  const grid = document.getElementById('store-grid');
+  const lastCheckEl = document.getElementById('last-check');
+  const statusBadge = document.getElementById('status-badge');
+  const pollSecsEl = document.getElementById('poll-secs');
+  const connState = document.getElementById('conn-state');
+  const statAvail = document.getElementById('stat-avail');
+  const statMiss = document.getElementById('stat-miss');
+  const statNew = document.getElementById('stat-new');
+  const statSse = document.getElementById('stat-sse');
+  const enableBtn = document.getElementById('enable-btn');
+  const toast = document.getElementById('toast');
+  const toastTitle = document.getElementById('toast-title');
+  const toastBody = document.getElementById('toast-body');
+  const logBody = document.getElementById('log-body');
+  const logCount = document.getElementById('log-count');
+
+  let prevAvailable = new Set();
+  let firstLoad = true;
+  let audioCtx = null;
+  let notifyAllowed = false;
+
+  enableBtn.addEventListener('click', async () => {
+    try {
+      audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)();
+      if (audioCtx.state === 'suspended') await audioCtx.resume();
+      const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.3, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) {
+        const t = i / audioCtx.sampleRate;
+        data[i] = Math.sin(2 * Math.PI * 880 * t) * Math.exp(-t * 6) * 0.4;
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf; src.connect(audioCtx.destination); src.start();
+    } catch (e) { console.warn('audio failed', e); }
+    if ('Notification' in window) {
+      const r = await Notification.requestPermission();
+      notifyAllowed = r === 'granted';
+      enableBtn.textContent = notifyAllowed
+        ? '🔔 通知已启用 · 提示音可播放'
+        : (r === 'denied' ? '通知被浏览器拒绝（仅页面内提示）' : '点击再次启用');
+    } else {
+      enableBtn.textContent = '浏览器不支持通知';
+    }
+  });
+
+  function beep(times = 1) {
+    if (!audioCtx) return;
+    if (audioCtx.state === 'suspended') audioCtx.resume();
+    const playOne = (delay, freq) => {
+      const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * 0.18, audioCtx.sampleRate);
+      const data = buf.getChannelData(0);
+      for (let i = 0; i < data.length; i++) {
+        const t = i / audioCtx.sampleRate;
+        const env = Math.exp(-t * 6);
+        data[i] = Math.sin(2 * Math.PI * freq * t) * env * 0.4;
+      }
+      const src = audioCtx.createBufferSource();
+      src.buffer = buf; src.connect(audioCtx.destination);
+      src.start(audioCtx.currentTime + delay);
+    };
+    for (let i = 0; i < times; i++) {
+      playOne(i * 0.28, i % 2 === 0 ? 1200 : 1600);
+    }
+  }
+
+  function showToast(title, body) {
+    toastTitle.textContent = title;
+    toastBody.textContent = body;
+    toast.classList.add('show');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => toast.classList.remove('show'), 6000);
+  }
+
+  function flashTitle(text) {
+    let on = true;
+    const old = document.title;
+    let n = 0;
+    clearInterval(flashTitle._i);
+    flashTitle._i = setInterval(() => {
+      document.title = on ? `🟢 ${text}` : old;
+      on = !on;
+      if (++n > 10) { clearInterval(flashTitle._i); document.title = old; }
+    }, 800);
+  }
+
+  function notify(title, body) {
+    if (notifyAllowed && 'Notification' in window && Notification.permission === 'granted') {
+      try {
+        const n = new Notification(title, { body, tag: 'apple-inv', requireInteraction: true });
+        n.onclick = () => { window.focus(); n.close(); };
+      } catch (e) { console.warn(e); }
+    }
+    beep(3);
+    showToast(title, body);
+    flashTitle(title);
+  }
+
+  function render(data) {
+    if (!data || data.status !== 'ok') {
+      statusBadge.textContent = (data && data.status) || '查询失败';
+      statusBadge.className = 'badge bad';
+      lastCheckEl.textContent = (data && data.last_attempt_at) || '—';
+      if (typeof data?.poll_seconds === 'number') {
+        pollSecsEl.textContent = `每 ${data.poll_seconds} 秒`;
+        pollSecsEl.style.color = data.poll_state === 'backoff' ? 'var(--warn)' : '';
+      }
+      return;
+    }
+    statusBadge.textContent = '监控中';
+    statusBadge.className = 'badge ok';
+    lastCheckEl.textContent = data.checked_at;
+    if (typeof data.poll_seconds === 'number') {
+      pollSecsEl.textContent = `每 ${data.poll_seconds} 秒`;
+      pollSecsEl.style.color = data.poll_state === 'backoff' ? 'var(--warn)' : '';
+    }
+
+    const byStore = new Map();
+    for (const obs of data.observations) {
+      if (!byStore.has(obs.store_number)) byStore.set(obs.store_number, { name: obs.store_name, items: [] });
+      byStore.get(obs.store_number).items.push(obs);
+    }
+
+    let availCount = 0, missCount = 0;
+    grid.innerHTML = '';
+    for (const [sid, info] of byStore) {
+      const storeEl = document.createElement('div');
+      storeEl.className = 'store';
+      const h3 = document.createElement('h3');
+      const availHere = info.items.filter((o) => o.pickup_display === 'available').length;
+      h3.innerHTML = `${info.name} <span class="count ${availHere ? 'has' : 'zero'}">${availHere}/${info.items.length} 有货</span>`;
+      storeEl.appendChild(h3);
+      const ul = document.createElement('ul');
+      for (const o of info.items) {
+        availCount += o.pickup_display === 'available' ? 1 : 0;
+        missCount  += o.pickup_display === 'available' ? 0 : 1;
+        const li = document.createElement('li');
+        const newKey = data.new_available && data.new_available.includes(`${o.part_number}|${o.store_number}`);
+        if (newKey) li.classList.add('flash');
+        li.innerHTML = `
+          <div class="sku">
+            <div class="label">${o.part_number}</div>
+            <div class="sub">${o.color || ''} · ${o.capacity || ''}</div>
+          </div>
+          <span class="status ${o.pickup_display === 'available' ? 'avail' : 'unavail'}">
+            ${o.pickup_quote || (o.pickup_display === 'available' ? '可取货' : '暂无供应')}
+          </span>`;
+        ul.appendChild(li);
+      }
+      storeEl.appendChild(ul);
+      grid.appendChild(storeEl);
+    }
+
+    statAvail.textContent = availCount;
+    statMiss.textContent = missCount;
+    statNew.textContent = (data.new_available || []).length;
+
+    const curSet = new Set(data.available || []);
+    const newly = [...curSet].filter((k) => !prevAvailable.has(k));
+    if (!firstLoad && newly.length) {
+      const lines = newly.map((k) => {
+        const [part, store] = k.split('|');
+        const obs = data.observations.find((o) => o.part_number === part && o.store_number === store);
+        return `${part}（${obs?.color || ''}·${obs?.capacity || ''}）@ ${obs?.store_name || store}`;
+      });
+      notify(`🟢 ${newly.length} 个新有货组合`, lines.join('；'));
+    }
+    prevAvailable = curSet;
+    firstLoad = false;
+  }
+
+  // === Live updates via SSE (single persistent connection) ===
+  let sse = null;
+  function connectSSE() {
+    if (sse) sse.close();
+    sse = new EventSource('/api/stream');
+    sse.addEventListener('open', () => {
+      connState.textContent = '已连接';
+      connState.className = 'conn-state on';
+      statSse.textContent = '在线';
+    });
+    sse.addEventListener('error', () => {
+      connState.textContent = '断线重连中';
+      connState.className = 'conn-state off';
+      statSse.textContent = '重连中';
+    });
+    sse.addEventListener('new-available', (ev) => {
+      try {
+        const d = JSON.parse(ev.data);
+        const lines = d.details.map((x) => `${x.part_number}（${x.color}${x.capacity}）@ ${x.store_name}`);
+        notify(`🟢 ${d.details.length} 个新有货组合`, lines.join('；'));
+        // Refresh full state for visual flash on the cards.
+        fetchState();
+      } catch {}
+    });
+    sse.addEventListener('state', () => fetchState());
+  }
+
+  async function fetchState() {
+    try {
+      const r = await fetch('/api/state', { cache: 'no-store' });
+      render(await r.json());
+    } catch (e) {
+      statusBadge.textContent = '连接断开';
+      statusBadge.className = 'badge bad';
+    }
+  }
+
+  async function fetchLog() {
+    try {
+      const r = await fetch('/api/log', { cache: 'no-store' });
+      const d = await r.json();
+      const entries = d.entries || [];
+      logCount.textContent = entries.length;
+      if (!entries.length) {
+        logBody.innerHTML = '<div class="log-empty">暂无日志</div>';
+        return;
+      }
+      const safe = (s) => String(s ?? '').replace(/[<>&]/g, (c) => ({'<':'&lt;','>':'&gt;','&':'&amp;'}[c]));
+      logBody.innerHTML = entries.map((e) => {
+        const cls = e.level === 'ok' ? 'ok' : (e.level === 'fail' ? 'fail' : 'skip');
+        const label = e.level === 'ok' ? 'OK' : (e.level === 'fail' ? 'FAIL' : 'SKIP');
+        return `<div class="log-row ${cls}">
+          <span class="ts">${safe(e.ts)}</span>
+          <span class="badge-cell">${label}</span>
+          <span class="msg">${safe(e.msg)}</span>
+        </div>`;
+      }).join('');
+    } catch (err) {
+      logBody.innerHTML = `<div class="log-empty">日志拉取失败：${err}</div>`;
+    }
+  }
+
+  fetchState();
+  connectSSE();
+  fetchLog();
+  setInterval(fetchLog, 5000);
+  </script>
+</body>
+</html>

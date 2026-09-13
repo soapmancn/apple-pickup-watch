@@ -1,0 +1,15 @@
+{
+  "name": "apple-pickup-watch",
+  "version": "1.0.0",
+  "description": "iPhone 18 Pro Max 深圳库存监控 · Cloudflare Workers + Durable Objects",
+  "main": "src/index.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "wrangler": "^3.90.0"
+  },
+  "license": "MIT"
+}
