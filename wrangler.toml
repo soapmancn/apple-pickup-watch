@@ -13,10 +13,10 @@ crons = ["*/2 * * * *"]
 name = "ROOM"
 class_name = "Room"
 
-# Latest migration ensures new DO instances use the V8 isolate.
+# Workers Free requires SQLite-backed Durable Objects.
 [[migrations]]
 tag = "v1"
-new_classes = ["Room"]
+new_sqlite_classes = ["Room"]
 
 [observability]
 enabled = true
