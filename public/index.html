@@ -550,7 +550,24 @@
       { part_number: 'MJYE4CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '冰川蓝色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjye4ch/a' },
       { part_number: 'MJYC4CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '银色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjyc4ch/a' },
     ],
-    hk: [],
+    // Hong Kong seed SKUs.  Apple's HK buy-iphone pages do not embed the
+    // part_number in the markup (URLs are SEO slugs and details are JSON
+    // hidden behind an XHR), so we ship a curated starter list — enough
+    // for the picker to be useful immediately.  The dashboard still tries
+    // to refresh from `/api/search/products?region=hk` and the user can
+    // add or remove any part_number via the manual input box.
+    hk: [
+      { part_number: 'MJXW4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '冰川色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxw4za/a' },
+      { part_number: 'MJXV4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '原色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxv4za/a' },
+      { part_number: 'MJXT4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '原色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxt4za/a' },
+      { part_number: 'MJXP4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '黑色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxp4za/a' },
+      { part_number: 'MJT14ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '1TB', color: '原色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjt14za/a' },
+      { part_number: 'MG6W4ZA/A', region: 'hk', model: 'iPhone 17', capacity: '256GB', color: '黑色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-17/mg6w4za/a' },
+      { part_number: 'MG6X4ZA/A', region: 'hk', model: 'iPhone 17', capacity: '256GB', color: '白色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-17/mg6x4za/a' },
+      { part_number: 'MHY04ZA/A', region: 'hk', model: 'iPhone Air', capacity: '256GB', color: '天藍色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-air/mhy04za/a' },
+      { part_number: 'MHYP4ZA/A', region: 'hk', model: 'iPhone Air', capacity: '512GB', color: '天藍色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-air/mhyp4za/a' },
+      { part_number: 'MFE04ZA/A', region: 'hk', model: 'iPhone 17e', capacity: '256GB', color: '黑色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-17e/mfe04za/a' },
+    ],
   };
   const SEED_STORES = {
     cn: [
@@ -558,7 +575,17 @@
       { region: 'cn', store_number: 'R484', store_name: '深圳益田假日广场', city: '深圳', state: '广东', address: '深圳市南山区深南大道 9028 号益田假日广场' },
       { region: 'cn', store_number: 'R793', store_name: '前海壹方城', city: '深圳', state: '广东', address: '深圳市宝安区新湖路 99 号 前海壹方城 L1 层' },
     ],
-    hk: [],
+    // Hong Kong seed Apple Stores — names + store numbers commonly in
+    // rotation.  Users can also paste any other R### via the manual input.
+    hk: [
+      { region: 'hk', store_number: 'R428', store_name: 'ifc mall', city: '香港', state: '香港', address: '中環金融街 8 號 國際金融中心商場' },
+      { region: 'hk', store_number: 'R499', store_name: 'Canton Road', city: '尖沙咀', state: '九龍', address: '尖沙咀廣東道 100 號' },
+      { region: 'hk', store_number: 'R409', store_name: 'Causeway Bay', city: '銅鑼灣', state: '香港', address: '銅鑼灣勿地臣街 1 號時代廣場' },
+      { region: 'hk', store_number: 'R485', store_name: 'Festival Walk', city: '九龍塘', state: '九龍', address: '九龍達之路 80 號 又一城' },
+      { region: 'hk', store_number: 'R610', store_name: 'APM', city: '觀塘', state: '九龍', address: '觀塘道 418 號 apm' },
+      { region: 'hk', store_number: 'R644', store_name: 'Tung Chung', city: '東涌', state: '香港', address: '大嶼山東涌達東路 18-20 號 東薈城名店倉' },
+      { region: 'hk', store_number: 'R673', store_name: 'New Town Plaza', city: '沙田', state: '新界', address: '沙田正街 2-8 號 新城市廣場' },
+    ],
   };
 
   function mergeRegionCatalogue(target, regionId) {

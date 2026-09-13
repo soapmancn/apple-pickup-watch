@@ -48,11 +48,16 @@ export const SEED_REGION_PART_NUMBERS = {
     'MJY84CH/A', 'MJY94CH/A', 'MJY74CH/A',
     'MJYD4CH/A', 'MJYE4CH/A', 'MJYC4CH/A',
   ],
-  hk: [],
+  hk: [
+    'MJXW4ZA/A', 'MJXV4ZA/A', 'MJXT4ZA/A', 'MJXP4ZA/A', 'MJT14ZA/A',
+    'MG6W4ZA/A', 'MG6X4ZA/A',
+    'MHY04ZA/A', 'MHYP4ZA/A',
+    'MFE04ZA/A',
+  ],
 };
 export const SEED_REGION_STORE_NUMBERS = {
   cn: ['R761', 'R484', 'R793'],
-  hk: [],
+  hk: ['R428', 'R499', 'R409', 'R485', 'R610', 'R644', 'R673'],
 };
 export const SEED_REGION_KEYWORD_ALERT = {
   cn: '',
