@@ -232,6 +232,14 @@
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
     .picker-manual input:focus { border-color: var(--accent); }
+    .region-tabs { display: inline-flex; gap: 4px; margin-left: 4px; }
+    .region-tab {
+      padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px;
+      font-size: 12px; background: var(--bg); color: var(--muted);
+      cursor: pointer; user-select: none;
+    }
+    .region-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .region-tab:hover:not(.active) { color: var(--fg); border-color: var(--accent); }
     .selected-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .selected-list:empty { display: none; }
     .settings-message { color: var(--muted); font-size: 12px; }
@@ -280,9 +288,11 @@
             <label for="interval-input">监控间隔（秒）</label>
             <input id="interval-input" type="number" min="10" max="86400" step="1" inputmode="numeric" />
           </div>
-          <div class="field">
-            <label for="location-input">查询位置 / 邮编</label>
-            <input id="location-input" type="text" placeholder="例如 518000" />
+          <div class="field" style="grid-column:span 2;">
+            <span class="muted" style="font-size:11px;">支持 region：</span>
+            <span class="region-tabs" id="region-tabs"></span>
+            <span class="muted" style="font-size:11px;margin-left:12px;">当前 region 的位置 / 邮编：</span>
+            <input id="location-input" type="text" placeholder="例如 518000 / 中環" style="display:inline-block;width:160px;margin-left:6px;" />
           </div>
         </div>
         <div class="picker">
@@ -317,8 +327,8 @@
 
         <div class="settings-fields" style="margin-top:15px;margin-bottom:0;">
           <div class="field">
-            <label for="keyword-alert-input">提醒关键字（推荐有货时也提醒，例 <code>Pro Max</code> <code>1TB</code> <code>勃艮第酒红色</code>，多个用空格 / 逗号）</label>
-            <input id="keyword-alert-input" type="text" autocomplete="off" placeholder="留空表示仅提醒你勾选的型号" />
+            <label for="keyword-alert-input">提醒关键字（推荐有货时也提醒，多 region 各自独立；多个用 `,` 或 `;` 分隔，每个内部可含空格，例如 <code>Pro Max,1TB</code>）</label>
+            <input id="keyword-alert-input" type="text" autocomplete="off" placeholder="留空表示仅提醒当前 region 勾选的型号" />
           </div>
         </div>
         <div class="settings-fields" style="margin-top:15px;margin-bottom:0;">
@@ -409,9 +419,21 @@
   const storeSelectedList = document.getElementById('store-selected-list');
   const manualPartInput = document.getElementById('manual-part-input');
   const manualStoreInput = document.getElementById('manual-store-input');
+  const regionTabs = document.getElementById('region-tabs');
 
   let settingsDirty = false;
   let settingsLoaded = false;
+
+  // Multi-region state. `regions` is keyed by region id (`cn`, `hk`).
+  // Each entry exposes `products` and `stores` catalogues and `settings`
+  // (the per-region sub-object).  The dashboard renders the current
+  // region's data and lets the user switch tabs to edit the other.
+  let activeRegion = 'cn';
+  const regions = {
+    cn: { products: [], stores: [], settings: null, label: '中国大陆', partSuffix: 'CH/A' },
+    hk: { products: [], stores: [], settings: null, label: '香港', partSuffix: 'ZA/A' },
+  };
+  let intervalSeconds = 120;
 
   let prevAvailable = new Set();
   let firstLoad = true;
@@ -502,69 +524,112 @@
 
   function renderSettings(data) {
     const settings = data?.settings;
-    const catalog = data?.catalog || data?.options?.catalog;
     if (!settings) return;
     if (settingsDirty && settingsLoaded) return;
 
-    const products = Array.isArray(catalog?.products) ? catalog.products : [];
-    const stores = Array.isArray(catalog?.stores) ? catalog.stores : [];
-    productCatalogue = products;
-    storeCatalogue = stores;
-
+    intervalSeconds = settings.interval_seconds || 120;
     intervalInput.min = 10;
     intervalInput.max = 86400;
-    intervalInput.value = settings.interval_seconds;
-    locationInput.value = settings.location;
-    keywordAlertInput.value = settings.keyword_alert || '';
-    similarKeywordPill.textContent = settings.keyword_alert ? settings.keyword_alert : '—（仅提醒勾选型号）';
+    intervalInput.value = intervalSeconds;
 
-    const selectedProducts = new Set(settings.part_numbers);
-    const selectedStores = new Set(settings.store_numbers);
+    // Catalogue may be the new byRegion shape (from /api/state and /api/settings)
+    // or the legacy flat shape; pull per-region data accordingly.
+    const byRegionCatalog = data?.catalog?.byRegion || {};
+    for (const regionId of Object.keys(regions)) {
+      const bucket = byRegionCatalog[regionId] || {};
+      regions[regionId].products = Array.isArray(bucket.products) ? bucket.products : [];
+      regions[regionId].stores = Array.isArray(bucket.stores) ? bucket.stores : [];
+      regions[regionId].settings = settings.regions?.[regionId] || null;
+    }
 
-    productFilterText = '';
-    productSearch.value = '';
-    renderProductPicker(products, selectedProducts, productFilterText);
-    syncManualPartInput(selectedProducts);
+    // Render region tabs.
+    regionTabs.innerHTML = Object.keys(regions).map((regionId) => {
+      const r = regions[regionId];
+      const r2 = settings.regions?.[regionId] || {};
+      const enabled = r2.enabled !== false;
+      return `<span class="region-tab ${regionId === activeRegion ? 'active' : ''}" data-region="${regionId}">${escapeHtml(r.label)}${enabled ? '' : ' · 停用'}</span>`;
+    }).join('');
+    regionTabs.querySelectorAll('.region-tab').forEach((el) => {
+      el.addEventListener('click', () => {
+        activeRegion = el.dataset.region;
+        renderRegion();
+      });
+    });
 
-    if (storeSearch.value !== settings.location) storeSearch.value = settings.location;
-    storeFilterText = settings.location || '';
-    renderStorePicker(stores, selectedStores, storeFilterText);
-    syncManualStoreInput(selectedStores);
-
+    renderRegion();
     settingsLoaded = true;
   }
 
-  let productCatalogue = [];
-  let storeCatalogue = [];
+  function renderRegion() {
+    const r = regions[activeRegion];
+    const rs = r.settings || { enabled: false, location: '', store_numbers: [], part_numbers: [], keyword_alert: '' };
+    locationInput.value = rs.location || '';
+    keywordAlertInput.value = rs.keyword_alert || '';
+    const tokens = (rs.keyword_alert || '').split('|').map((s) => s.trim()).filter(Boolean);
+    similarKeywordPill.textContent = tokens.length ? tokens.join(' · ') : '—（仅提醒当前 region 勾选型号）';
+
+    renderProductPicker(r.products, new Set(rs.part_numbers || []), productFilterText);
+    renderStorePicker(r.stores, new Set(rs.store_numbers || []), storeFilterText);
+    productSearch.value = productFilterText;
+    if (!storeSearch.value && rs.location) storeSearch.value = rs.location;
+    if (!productPickerStatus.dataset.touched) {
+      productPickerStatus.textContent = r.products.length
+        ? `${activeRegion} · ${r.products.length} 个 SKU 已加载`
+        : `${activeRegion} · 尚未拉取 SKU`;
+    }
+    storePickerStatus.textContent = r.stores.length
+      ? `${activeRegion} · ${r.stores.length} 家店已加载`
+      : `${activeRegion} · 请输入城市或邮编`;
+  }
+
   let productFilterText = '';
   let storeFilterText = '';
 
+  // Merge `selected` (the user's picks — which may include manually-typed
+  // part/store numbers that don't exist in the catalogue yet) into the
+  // catalogue so they always show up with a checkable row.
+  function augmentCatalogue(all, selected, fallbackType) {
+    const set = new Set(all.map((entry) => entry.part_number || entry.store_number));
+    const stub = { manual: true };
+    for (const value of selected) {
+      if (!set.has(value)) {
+        if (fallbackType === 'product') {
+          all.push({ part_number: value, model: '手动输入 SKU', capacity: '', color: '', purchase_url: '', _manual: true });
+        } else {
+          all.push({ store_number: value, store_name: value, city: '', state: '', address: '', _manual: true });
+        }
+      }
+    }
+    return all;
+  }
+
   function renderProductPicker(all, selected, filterText) {
     const term = (filterText || '').trim().toLowerCase();
-    const filtered = !term ? all : all.filter((p) => {
-      const hay = `${p.model || ''} ${p.capacity || ''} ${p.color || ''} ${p.part_number || ''}`.toLowerCase();
-      return hay.includes(term);
-    });
-    if (!all.length) {
-      productPickerList.innerHTML = '<div class="picker-empty">还没有可用的 iPhone SKU，点击「重新拉取」从 Apple 官网同步。</div>';
-      productPickerStatus.textContent = '尚未拉取 SKU';
+    const merged = augmentCatalogue([...all], selected, 'product');
+    if (!merged.length) {
+      productPickerList.innerHTML = '<div class="picker-empty">还没有可用的 iPhone SKU。点击「重新拉取」从 Apple 官网同步，或直接在下方手动输入 part_number。</div>';
+      productPickerStatus.textContent = `${activeRegion} · 尚未拉取 SKU`;
       productSelectedList.innerHTML = '';
       return;
     }
+    const filtered = !term ? merged : merged.filter((p) => {
+      const hay = `${p.model || ''} ${p.capacity || ''} ${p.color || ''} ${p.part_number || ''}`.toLowerCase();
+      return hay.includes(term);
+    });
     if (!filtered.length) {
       productPickerList.innerHTML = '<div class="picker-empty">没有匹配项，输入关键字搜索。</div>';
     } else {
       productPickerList.innerHTML = filtered.map((p) => `
-        <label class="picker-item">
+        <label class="picker-item ${p._manual ? 'manual' : ''}">
           <input type="checkbox" data-part-number="${escapeHtml(p.part_number)}" data-kind="product" ${selected.has(p.part_number) ? 'checked' : ''}>
           <span>
-            <strong>${escapeHtml(p.model || '')}</strong> · ${escapeHtml(p.capacity || '')}
-            <span class="sub">${escapeHtml(p.color || '')} · ${escapeHtml(p.part_number)}</span>
+            <strong>${escapeHtml(p.model || '手动输入 SKU')}</strong> · ${escapeHtml(p.capacity || '')}
+            <span class="sub">${escapeHtml(p.color || '')} · ${escapeHtml(p.part_number)}${p._manual ? ' · 手动' : ''}</span>
           </span>
         </label>`).join('');
     }
-    productPickerStatus.textContent = `共 ${all.length} 个 SKU · 显示 ${filtered.length} 个 · 已选 ${selected.size}`;
-    renderSelectedProducts(all, selected);
+    productPickerStatus.textContent = `${activeRegion} · 共 ${merged.length} 个 SKU · 显示 ${filtered.length} 个 · 已选 ${selected.size}`;
+    renderSelectedProducts(merged, selected);
   }
 
   function renderSelectedProducts(all, selected) {
@@ -578,30 +643,31 @@
 
   function renderStorePicker(all, selected, filterText) {
     const term = (filterText || '').trim().toLowerCase();
-    const filtered = !term ? all : all.filter((s) => {
-      const hay = `${s.store_name || ''} ${s.city || ''} ${s.state || ''} ${s.store_number || ''} ${s.address || ''}`.toLowerCase();
-      return hay.includes(term);
-    });
-    if (!all.length) {
-      storePickerList.innerHTML = '<div class="picker-empty">输入城市/邮编后点击「重新搜索」拉取附近的 Apple Store。</div>';
-      storePickerStatus.textContent = '请输入城市或邮编';
+    const merged = augmentCatalogue([...all], selected, 'store');
+    if (!merged.length) {
+      storePickerList.innerHTML = '<div class="picker-empty">还没有可用的 Apple Store。输入城市/邮编后点击「重新搜索」，或在下方手动输入 store_number。</div>';
+      storePickerStatus.textContent = `${activeRegion} · 请输入城市或邮编`;
       storeSelectedList.innerHTML = '';
       return;
     }
+    const filtered = !term ? merged : merged.filter((s) => {
+      const hay = `${s.store_name || ''} ${s.city || ''} ${s.state || ''} ${s.store_number || ''} ${s.address || ''}`.toLowerCase();
+      return hay.includes(term);
+    });
     if (!filtered.length) {
       storePickerList.innerHTML = '<div class="picker-empty">没有匹配项，试试别的关键字。</div>';
     } else {
       storePickerList.innerHTML = filtered.map((s) => `
-        <label class="picker-item">
+        <label class="picker-item ${s._manual ? 'manual' : ''}">
           <input type="checkbox" data-store-number="${escapeHtml(s.store_number)}" data-kind="store" ${selected.has(s.store_number) ? 'checked' : ''}>
           <span>
             <strong>${escapeHtml(s.store_name)}</strong>
-            <span class="sub">${escapeHtml(s.city || '')} · ${escapeHtml(s.store_number)}</span>
+            <span class="sub">${escapeHtml(s.city || '')} · ${escapeHtml(s.store_number)}${s._manual ? ' · 手动' : ''}</span>
           </span>
         </label>`).join('');
     }
-    storePickerStatus.textContent = `共 ${all.length} 家店 · 显示 ${filtered.length} 家 · 已选 ${selected.size}`;
-    renderSelectedStores(all, selected);
+    storePickerStatus.textContent = `${activeRegion} · 共 ${merged.length} 家店 · 显示 ${filtered.length} 家 · 已选 ${selected.size}`;
+    renderSelectedStores(merged, selected);
   }
 
   function renderSelectedStores(all, selected) {
@@ -633,31 +699,37 @@
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderProductPicker(productCatalogue, readSelectedProducts(), productFilterText);
+    renderProductPicker(regions[activeRegion].products, readSelectedProducts(), productFilterText);
   });
   storePickerList.addEventListener('change', () => {
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderStorePicker(storeCatalogue, readSelectedStores(), storeFilterText);
+    renderStorePicker(regions[activeRegion].stores, readSelectedStores(), storeFilterText);
   });
 
   productRefreshBtn.addEventListener('click', () => refreshProducts(productSearch.value.trim()));
   storeRefreshBtn.addEventListener('click', () => refreshStores(storeSearch.value.trim() || locationInput.value.trim()));
 
-  let refreshSeq = 0;
   async function refreshProducts(query) {
     productRefreshBtn.disabled = true;
-    productPickerStatus.textContent = query ? `搜索中：${query}…` : '拉取 Apple 在售 SKU 中…';
+    productPickerStatus.textContent = query ? `${activeRegion} 搜索中：${query}…` : `${activeRegion} 拉取 Apple 在售 SKU 中…`;
     try {
-      const url = query ? `/api/search/products?q=${encodeURIComponent(query)}` : '/api/search/products';
-      const res = await fetch(url);
+      const params = new URLSearchParams({ region: activeRegion });
+      if (query) params.set('q', query);
+      const res = await fetch(`/api/search/products?${params.toString()}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
       const products = Array.isArray(json.products) ? json.products : [];
-      productCatalogue = products;
+      regions[activeRegion].products = products;
       productFilterText = productSearch.value;
       renderProductPicker(products, readSelectedProducts(), productFilterText);
+      // Persist into DO so the catalogue survives reloads.
+      fetch('/api/catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ region: activeRegion, products: true, stores: false, locations: { [activeRegion]: locationInput.value.trim() } }),
+      }).catch(() => {});
     } catch (err) {
       productPickerStatus.textContent = `拉取失败：${err.message || err}`;
     } finally {
@@ -667,22 +739,21 @@
 
   async function refreshStores(query) {
     storeRefreshBtn.disabled = true;
-    storePickerStatus.textContent = `搜索附近门店：${query || '默认位置'}…`;
+    storePickerStatus.textContent = `${activeRegion} 搜索附近门店：${query || '默认位置'}…`;
     try {
-      const url = query ? `/api/search/stores?q=${encodeURIComponent(query)}` : '/api/search/stores';
-      const res = await fetch(url);
+      const params = new URLSearchParams({ region: activeRegion });
+      if (query) params.set('q', query);
+      const res = await fetch(`/api/search/stores?${params.toString()}`);
       const json = await res.json().catch(() => ({}));
       if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
       const stores = Array.isArray(json.stores) ? json.stores : [];
-      storeCatalogue = stores;
+      regions[activeRegion].stores = stores;
       storeFilterText = storeSearch.value;
       renderStorePicker(stores, readSelectedStores(), storeFilterText);
-      // Also persist the catalogue in the durable object so a refresh keeps
-      // the same list across reloads.
       fetch('/api/catalog', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ products: false, location: query || locationInput.value.trim() }),
+        body: JSON.stringify({ region: activeRegion, products: false, stores: true, locations: { [activeRegion]: query || locationInput.value.trim() } }),
       }).catch(() => {});
     } catch (err) {
       storePickerStatus.textContent = `搜索失败：${err.message || err}`;
@@ -709,50 +780,33 @@
       .filter(Boolean);
   }
 
-  function syncManualPartInput(selected) {
-    const manual = parseManualTokens(manualPartInput.value);
-    const missing = manual.filter((v) => !productCatalogue.some((p) => p.part_number === v));
-    if (missing.length) manualPartInput.value = manual.join(' ');
-    const catalogueSelected = [...selected].filter((pn) => productCatalogue.some((p) => p.part_number === pn));
-    if (catalogueSelected.length && !manual.length) {
-      // Don't auto-fill the manual box with catalogue values; users use it
-      // for unknown parts only. But keep a hint in placeholder if needed.
-    }
-  }
-
-  function syncManualStoreInput(selected) {
-    const manual = parseManualTokens(manualStoreInput.value);
-    const missing = manual.filter((v) => !storeCatalogue.some((s) => s.store_number === v));
-    if (missing.length) manualPartInput; // noop placeholder
-  }
-
   manualPartInput.addEventListener('input', () => {
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderProductPicker(productCatalogue, readSelectedProducts(), productFilterText);
+    renderProductPicker(regions[activeRegion].products, readSelectedProducts(), productFilterText);
   });
   manualStoreInput.addEventListener('input', () => {
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderStorePicker(storeCatalogue, readSelectedStores(), storeFilterText);
+    renderStorePicker(regions[activeRegion].stores, readSelectedStores(), storeFilterText);
   });
 
   async function bootstrapCatalogue() {
-    // Trigger a one-time refresh so the dashboard is populated even on cold
-    // open; ignore errors (the user can retry manually).
     try {
       await Promise.allSettled([
         fetch('/api/catalog', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ products: true, stores: true, location: locationInput.value.trim() || '518000' }),
+          body: JSON.stringify({
+            products: true,
+            stores: true,
+            locations: { cn: '518000', hk: '中環' },
+          }),
         }),
       ]);
-    } catch (err) {
-      /* noop */
-    }
+    } catch (err) { /* noop */ }
   }
 
   function renderSimilar(snapshot) {
@@ -762,26 +816,23 @@
       return;
     }
     similarSummary.textContent =
-      `${snapshot.ts || ''} · 探测 ${snapshot.total_probed || 0} 个组合 · 有货 ${snapshot.total_available || 0} 条 · 失败 ${snapshot.errored || 0} · 关键字匹配 ${(snapshot.keyword_hits || []).length}`;
-    const hitKeys = new Set((snapshot.keyword_hits || []).map((h) => h.key));
-    const items = [];
-    for (const probe of snapshot.similar || []) {
-      for (const sim of probe.similar || []) {
-        items.push({ ...sim, source_part: probe.part_number, store_number: probe.store_number });
-      }
-    }
+      `${snapshot.ts || ''} · 探测 ${snapshot.total_probed || 0} 个组合 · 去重后 ${snapshot.deduplicated ?? snapshot.total_available ?? 0} 条 · 失败 ${snapshot.errored || 0} · 关键字匹配 ${(snapshot.keyword_hits || []).length}`;
+    const hits = snapshot.keyword_hits || [];
+    const items = Array.isArray(snapshot.items) && snapshot.items.length
+      ? snapshot.items
+      : (snapshot.similar || []).flatMap((probe) => (probe.similar || []).map((sim) => ({ ...sim, region: probe.region, source_part: probe.part_number, store_number: probe.store_number })));
     if (!items.length) {
       similarList.innerHTML = '<div class="similar-empty">本次扫描没有发现 Apple 推荐的有货相似机型。</div>';
       return;
     }
     similarList.innerHTML = items.map((it) => {
-      const key = `${it.part_number}|${it.store_number}`;
-      const hit = hitKeys.has(key);
+      const regionLabel = (it.region || '').toUpperCase() === 'HK' ? '香港' : '大陆';
+      const hit = hits.find((h) => h.part_number === it.part_number && h.store_number === it.store_number && h.region === it.region);
       const title = it.title || `${it.model || ''} ${it.capacity || ''} ${it.color || ''}`.trim() || it.part_number;
       return `<div class="similar-item ${hit ? 'hit' : ''}">
-        <div class="title">${escapeHtml(title)}${hit ? ` <span class="kw">[${escapeHtml((snapshot.tokens || []).find((tok) => title.includes(tok)) || '关键字')}]</span>` : ''}</div>
+        <div class="title">[${regionLabel}] ${escapeHtml(title)}${hit ? ` <span class="kw">[${escapeHtml(hit.keyword)}]</span>` : ''}</div>
         <div class="meta">@ ${escapeHtml(it.store_name || it.store_number)} · ${escapeHtml(it.pickup_quote || '可取货')}</div>
-        <div class="meta">源查询 ${escapeHtml(it.source_part)} · Apple part <code>${escapeHtml(it.part_number)}</code></div>
+        <div class="meta">源查询 ${escapeHtml(it.source_part || '—')} · Apple part <code>${escapeHtml(it.part_number)}</code></div>
       </div>`;
     }).join('');
   }
@@ -792,25 +843,64 @@
     settingsMessage.className = 'settings-message';
   });
 
+  function collectRegionPayload() {
+    // Walk every region: read the current view's picks for `activeRegion`
+    // and the DOM-checked values for the others (we re-render each region
+    // to pull DOM values when collecting).  Manual input box values stay
+    // scoped to the active region in the DOM; for non-active regions we
+    // pull from `regions[id].settings` and merge the active one's edits.
+    const out = {};
+    for (const regionId of Object.keys(regions)) {
+      if (regionId === activeRegion) {
+        out[regionId] = {
+          enabled: true,
+          location: locationInput.value.trim(),
+          store_numbers: [...readSelectedStores()],
+          part_numbers: [...readSelectedProducts()],
+          keyword_alert: keywordAlertInput.value.trim(),
+        };
+      } else {
+        const prev = regions[regionId].settings || {};
+        out[regionId] = {
+          enabled: prev.enabled !== false,
+          location: prev.location || '',
+          store_numbers: [...(prev.store_numbers || [])],
+          part_numbers: [...(prev.part_numbers || [])],
+          keyword_alert: prev.keyword_alert || '',
+        };
+      }
+    }
+    return out;
+  }
+
   saveSettingsBtn.addEventListener('click', async () => {
-    const storeNumbers = [...readSelectedStores()];
-    const partNumbers = [...readSelectedProducts()];
-    if (storeNumbers.length === 0) {
-      settingsMessage.textContent = '请至少选择一家 Apple Store';
+    const collected = collectRegionPayload();
+    const enabledRegions = Object.keys(collected).filter((id) => collected[id].enabled);
+    if (!enabledRegions.length) {
+      settingsMessage.textContent = '请至少启用一个 region';
       settingsMessage.className = 'settings-message bad';
       return;
     }
-    if (partNumbers.length === 0) {
-      settingsMessage.textContent = '请至少选择一款 iPhone SKU';
-      settingsMessage.className = 'settings-message bad';
-      return;
+    for (const id of enabledRegions) {
+      if (!collected[id].location) {
+        settingsMessage.textContent = `${regions[id].label}：请填写位置 / 邮编`;
+        settingsMessage.className = 'settings-message bad';
+        return;
+      }
+      if (!collected[id].store_numbers.length) {
+        settingsMessage.textContent = `${regions[id].label}：请至少选择一家 Apple Store`;
+        settingsMessage.className = 'settings-message bad';
+        return;
+      }
+      if (!collected[id].part_numbers.length) {
+        settingsMessage.textContent = `${regions[id].label}：请至少选择一款 SKU`;
+        settingsMessage.className = 'settings-message bad';
+        return;
+      }
     }
     const payload = {
       interval_seconds: Number(intervalInput.value),
-      location: locationInput.value.trim(),
-      store_numbers: storeNumbers,
-      part_numbers: partNumbers,
-      keyword_alert: keywordAlertInput.value.trim(),
+      regions: collected,
     };
 
     saveSettingsBtn.disabled = true;

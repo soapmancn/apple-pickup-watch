@@ -457,51 +457,78 @@ export class Room {
     let totalProbed = 0;
     let errored = 0;
     const keywordHits = [];
+    // De-duplicate: when the same source_part yields the same Apple
+    // recommendations everywhere (typical — the recommendations endpoint
+    // returns the same "nearby available models" regardless of the asked
+    // part), collapse them into a single row keyed by (similar_part, store,
+    // region).  Track which (source_part, store) pairs we've already shown
+    // so the dashboard isn't flooded with 18 identical cards.
+    const seenSourceKeys = new Set();
+    const seenItemKeys = new Set();
+    const dedupedItems = [];
+    const probeSummaries = [];
+
     const previousKeys = new Set(this.previousSimilarKeys || []);
     const currentKeys = new Set();
     const newHitKeys = new Set();
 
     for (const probe of similar) {
       totalProbed += 1;
-      if (probe.error) { errored += 1; continue; }
-      if (!probe.similar || !probe.similar.length) continue;
+      if (probe.error) { errored += 1; probeSummaries.push({ ...probe, deduplicated: true }); continue; }
+      if (!probe.similar || !probe.similar.length) {
+        probeSummaries.push({ ...probe, deduplicated: true });
+        continue;
+      }
+      const sourceKey = `${probe.region}|${probe.part_number}|${probe.store_number}`;
+      const firstForSource = !seenSourceKeys.has(sourceKey);
+      seenSourceKeys.add(sourceKey);
       const region = this.regionConfigs?.find((r) => r.id === probe.region);
       const regionLabel = region?.label || probe.region;
       const storeByNumber = new Map((region?.stores || []).map((s) => [s.store_number, s]));
-      const productByPart = new Map((region?.products || []).map((p) => [p.part_number, p]));
       const sourceStore = storeByNumber.get(probe.store_number);
       const storeName = sourceStore?.store_name || probe.store_number;
       const tokens = regionKeywords[probe.region] || [];
 
+      const keptForThisProbe = [];
       for (const item of probe.similar) {
         totalAvailable += 1;
-        const key = `${item.part_number}|${probe.store_number}`;
-        currentKeys.add(key);
+        const itemKey = `${probe.region}|${item.part_number}|${probe.store_number}`;
+        const isDuplicate = seenItemKeys.has(itemKey);
+        if (isDuplicate) continue;
+        seenItemKeys.add(itemKey);
+        currentKeys.add(itemKey);
         const title = item.title || `${item.model || ''} ${item.capacity || ''} ${item.color || ''}`.trim() || item.part_number;
         const summary = `[${regionLabel}] ${title} @ ${storeName}`;
         this.appendLog('ok', `相似机型有货 · ${summary} · ${item.pickup_quote || ''}`.slice(0, 240));
         const matched = pickKeyword(tokens, title);
+        const enqueued = {
+          region: probe.region,
+          source_part: probe.part_number,
+          store_name: storeName,
+          store_number: probe.store_number,
+          part_number: item.part_number,
+          title,
+          pickup_quote: item.pickup_quote,
+          pickup_display: item.pickup_display,
+          model: item.model,
+          capacity: item.capacity,
+          color: item.color,
+        };
+        dedupedItems.push(enqueued);
+        keptForThisProbe.push(enqueued);
         if (matched) {
-          keywordHits.push({
-            region: probe.region,
-            key,
-            title,
-            store_name: storeName,
-            store_number: probe.store_number,
-            part_number: item.part_number,
-            pickup_quote: item.pickup_quote,
-            keyword: matched,
-          });
-          if (!previousKeys.has(key)) newHitKeys.add(key);
+          keywordHits.push({ ...enqueued, keyword: matched });
+          if (!previousKeys.has(itemKey)) newHitKeys.add(itemKey);
         }
       }
+      probeSummaries.push({ ...probe, deduplicated: !firstForSource, kept: keptForThisProbe.length });
     }
 
     this.previousSimilarKeys = [...currentKeys];
 
     this.appendLog(
       'skip',
-      `相似机型扫描 · 探测 ${totalProbed} 个组合 · 有货 ${totalAvailable} 条 · 失败 ${errored} · 关键字匹配 ${keywordHits.length}`,
+      `相似机型扫描 · 探测 ${totalProbed} 个组合 · 去重后 ${dedupedItems.length} 条 · 失败 ${errored} · 关键字匹配 ${keywordHits.length}`,
     );
 
     this.lastSimilarAvailability = {
@@ -509,14 +536,16 @@ export class Room {
       total_probed: totalProbed,
       total_available: totalAvailable,
       errored,
-      similar: similar.slice(0, 80),
+      deduplicated: dedupedItems.length,
+      items: dedupedItems,
+      probes: probeSummaries,
       keyword_hits: keywordHits,
     };
 
     if (newHitKeys.size > 0) {
       const broadcast = {
         type: 'keyword-available',
-        hits: keywordHits.filter((h) => newHitKeys.has(h.key)),
+        hits: keywordHits.filter((h) => newHitKeys.has(`${h.region}|${h.part_number}|${h.store_number}`)),
         ts: nowCst(),
       };
       for (const c of this.subscribers) this.safeEnqueue(c, 'keyword-available', broadcast);
