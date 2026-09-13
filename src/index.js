@@ -10,39 +10,22 @@
  *                          can verify browser-side notifications without
  *                          waiting for a real Apple restock. Requires
  *                          header `X-Admin-Key: <ADMIN_KEY>` env var.
- *   Cron every 2 min  → fetches apple.com.cn pickup-message, diffs
- *                          against previous state, broadcasts to all SSE
- *                          subscribers via the Room DO.
+ *   Cron every minute → reads CHECK_INTERVAL_MINUTES, fetches Apple only
+ *                         when the configured interval is due, then diffs
+ *                         against previous state and broadcasts via Room.
  *
- * The cron schedule ALSO wakes the DO so newly-opened browser tabs get
- * fresh data immediately (avoids waiting up to 2 min on first load).
+ * Cloudflare Cron has one-minute granularity. The environment variable can
+ * select any whole-minute interval from 1 to 1440.
  */
 
 import { Room } from './room.js';
+import {
+  DEFAULT_CHECK_INTERVAL_MINUTES,
+  getMonitorConfig,
+  isScheduledCheckDue,
+} from './config.js';
 
 const PICKUP_URL = 'https://www.apple.com.cn/shop/retail/pickup-message';
-const SOURCE_URL = 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy74ch/a';
-const LOCATION = '518000';
-const PARTS = [
-  'MJY84CH/A', 'MJY94CH/A', 'MJY74CH/A',
-  'MJYD4CH/A', 'MJYE4CH/A', 'MJYC4CH/A',
-];
-const STORES = ['R761', 'R484', 'R793'];
-
-const VARIANTS = [
-  { part_number: 'MJY84CH/A', model: 'iPhone 18 Pro Max', color: '勃艮第酒红色', capacity: '256GB', purchase_url: `https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy84ch/a` },
-  { part_number: 'MJY94CH/A', model: 'iPhone 18 Pro Max', color: '冰川蓝色',   capacity: '256GB', purchase_url: `https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy94ch/a` },
-  { part_number: 'MJY74CH/A', model: 'iPhone 18 Pro Max', color: '银色',       capacity: '256GB', purchase_url: `https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy74ch/a` },
-  { part_number: 'MJYD4CH/A', model: 'iPhone 18 Pro Max', color: '勃艮第酒红色', capacity: '512GB', purchase_url: `https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjyd4ch/a` },
-  { part_number: 'MJYE4CH/A', model: 'iPhone 18 Pro Max', color: '冰川蓝色',   capacity: '512GB', purchase_url: `https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjye4ch/a` },
-  { part_number: 'MJYC4CH/A', model: 'iPhone 18 Pro Max', color: '银色',       capacity: '512GB', purchase_url: `https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjyc4ch/a` },
-];
-
-const STORE_INFO = {
-  R761: { store_number: 'R761', store_name: '深圳万象城',       city: '深圳', state: '广东', distance: '6.6 km',   address: '深圳市罗湖区宝安南路 1881 号 深圳万象城（一期）B1 层' },
-  R484: { store_number: 'R484', store_name: '深圳益田假日广场', city: '深圳', state: '广东', distance: '7.98 km',  address: '深圳市南山区深南大道 9028 号益田假日广场' },
-  R793: { store_number: 'R793', store_name: '前海壹方城',       city: '深圳', state: '广东', distance: '17.13 km', address: '深圳市宝安区新湖路 99 号 前海壹方城 L1 层' },
-};
 
 export { Room };
 
@@ -88,24 +71,42 @@ export default {
   },
 
   /**
-   * Cron trigger — runs every 2 minutes.
+   * Cloudflare wakes this Worker every minute; the environment variable
+   * controls which minute buckets perform a real Apple inventory request.
    */
   async scheduled(event, env, ctx) {
-    ctx.waitUntil(runTick(env));
+    ctx.waitUntil(runScheduled(event, env));
   },
 };
 
+async function runScheduled(event, env) {
+  let config;
+  try {
+    config = getMonitorConfig(env);
+  } catch (err) {
+    await reportTickError(
+      env,
+      `Configuration error: ${String((err && err.message) || err)}`,
+      DEFAULT_CHECK_INTERVAL_MINUTES * 60,
+    );
+    return;
+  }
+
+  if (!isScheduledCheckDue(event?.scheduledTime, config.intervalMinutes)) return;
+  await runTick(env, config);
+}
+
 /**
- * Query every selected part in one Apple pickup-message request, then hand
- * the normalized observations to the Room for state diff and SSE broadcast.
+ * Query every selected product in one Apple pickup-message request, then hand
+ * the normalized observations and active variable values to the Room.
  */
-async function runTick(env) {
+async function runTick(env, config) {
   const id = env.ROOM.idFromName('singleton');
   const room = env.ROOM.get(id);
   const checkedAt = formatCst(new Date());
 
   try {
-    const observations = await fetchPickupObservations();
+    const observations = await fetchPickupObservations(config);
     await room.fetch(new Request('https://room/tick', {
       method: 'POST',
       body: JSON.stringify({
@@ -113,6 +114,10 @@ async function runTick(env) {
         observations,
         fail_count: 0,
         ok_count: observations.length,
+        poll_seconds: config.pollSeconds,
+        stores: config.stores,
+        products: config.products,
+        source_url: config.sourceUrl,
       }),
     }));
   } catch (err) {
@@ -121,22 +126,42 @@ async function runTick(env) {
       body: JSON.stringify({
         checked_at: checkedAt,
         observations: [],
-        fail_count: STORES.length,
+        fail_count: config.stores.length,
         ok_count: 0,
+        poll_seconds: config.pollSeconds,
+        stores: config.stores,
+        products: config.products,
+        source_url: config.sourceUrl,
         error: String((err && err.message) || err).slice(0, 300),
       }),
     }));
   }
 }
 
+async function reportTickError(env, error, pollSeconds) {
+  const id = env.ROOM.idFromName('singleton');
+  const room = env.ROOM.get(id);
+  await room.fetch(new Request('https://room/tick', {
+    method: 'POST',
+    body: JSON.stringify({
+      checked_at: formatCst(new Date()),
+      observations: [],
+      fail_count: 1,
+      ok_count: 0,
+      poll_seconds: pollSeconds,
+      error: String(error).slice(0, 300),
+    }),
+  }));
+}
+
 /**
  * Apple expects `pl=true`, `location`, and indexed `mts.N` / `parts.N`
  * query parameters. Its response contains nearby stores; select only the
- * configured Shenzhen stores and normalize `partsAvailability`.
+ * stores configured in MONITOR_STORES_JSON and normalize availability.
  */
-async function fetchPickupObservations() {
-  const params = new URLSearchParams({ pl: 'true', location: LOCATION });
-  PARTS.forEach((part, index) => {
+export async function fetchPickupObservations(config) {
+  const params = new URLSearchParams({ pl: 'true', location: config.location });
+  config.parts.forEach((part, index) => {
     params.set(`mts.${index}`, 'regular');
     params.set(`parts.${index}`, part);
   });
@@ -145,7 +170,7 @@ async function fetchPickupObservations() {
     headers: {
       'User-Agent': 'Mozilla/5.0 AppleCNInventoryMonitor/Workers',
       'Accept': 'application/json,text/plain,*/*',
-      'Referer': SOURCE_URL,
+      'Referer': config.sourceUrl,
     },
     cf: { cacheTtl: 0, cacheEverything: false },
   });
@@ -163,17 +188,21 @@ async function fetchPickupObservations() {
       .filter((store) => store && store.storeNumber)
       .map((store) => [store.storeNumber, store]),
   );
-  const missingStores = STORES.filter((store) => !byNumber.has(store));
+  const missingStores = config.storeNumbers.filter((store) => !byNumber.has(store));
   if (missingStores.length) {
     throw new Error(`Selected stores missing from Apple response: ${missingStores.join(', ')}`);
   }
 
+  const configuredStores = new Map(
+    config.stores.map((store) => [store.store_number, store]),
+  );
   const observations = [];
   const missingPairs = [];
-  for (const storeNumber of STORES) {
+  for (const storeNumber of config.storeNumbers) {
     const store = byNumber.get(storeNumber);
+    const configuredStore = configuredStores.get(storeNumber) || {};
     const availability = store.partsAvailability || {};
-    for (const part of PARTS) {
+    for (const part of config.parts) {
       const item = availability[part];
       const display = item && item.pickupDisplay;
       if (!item || !['available', 'unavailable', 'ineligible'].includes(display)) {
@@ -183,8 +212,8 @@ async function fetchPickupObservations() {
       observations.push({
         part_number: part,
         store_number: storeNumber,
-        store_name: String(store.storeName || STORE_INFO[storeNumber].store_name).trim(),
-        city: store.city || '深圳',
+        store_name: String(store.storeName || configuredStore.store_name || storeNumber).trim(),
+        city: store.city || configuredStore.city || '',
         pickup_display: display,
         pickup_quote: stripMarkup(item.pickupSearchQuote || ''),
         pickup_quote_value: item.pickupSearchQuoteValue ?? null,

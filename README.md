@@ -5,7 +5,7 @@ iPhone 18 Pro Max 深圳三家 Apple Store 到店库存监控，部署在 Cloudf
 - **全球边缘 IP 轮换抓取** — Apple 不会因为同一 IP 高频请求而 541
 - **SSE 实时推送** — 浏览器一打开就接到推送，无轮询
 - **浏览器原生通知 + 提示音 + title 闪烁** — 有货立刻响3 声"哔-哔-哔"
-- **完全免费** — Workers 免费层100k 请求/天，cron 间隔2 分钟 = ~720 次/天，远低于限额
+- **完全免费** — Workers 免费层 100k 请求/天；默认每 2 分钟检测，也可用环境变量修改
 
 ## 一键部署（5 分钟）
 
@@ -81,25 +81,50 @@ curl -X POST https://apple-pickup-watch.YOUR-SUBDOMAIN.workers.dev/api/test-stoc
 
 打开 dashboard 的浏览器标签页会立刻收到通知 + 3 声哔 + title 闪烁。
 
-## 配置项
+## 配置项（Cloudflare 环境变量）
 
-`wrangler.toml` 里的 cron 是 `*/2 * * * *`（每 2 分钟）。如果想更快 / 更慢，改这个值然后 `wrangler deploy`。
+部署后打开 Cloudflare Dashboard：
 
-`src/index.js` 顶部：
+**Workers & Pages → `apple-pickup-watch` → Settings → Variables and Secrets → Add variable**
 
-```js
-const PARTS  = [...]   // 监控的 part_number 列表
-const STORES = [...]   // 监控的门店 store_number 列表
-const VARIANTS = [...] // 展示用的颜色+容量元数据
+所有变量都是可选的；不设置时继续使用当前的深圳三店、6 个 iPhone 18 Pro Max SKU 和 2 分钟间隔。
+
+| 变量 | 作用 | 默认值/格式 |
+|---|---|---|
+| `CHECK_INTERVAL_MINUTES` | 实际库存检测间隔 | 整数 `1`–`1440`，默认 `2`；Cloudflare 最快 1 分钟 |
+| `MONITOR_LOCATION` | Apple 查询位置或邮编 | 默认 `518000` |
+| `MONITOR_STORES_JSON` | 要监控的门店 | 非空 JSON 数组 |
+| `MONITOR_PRODUCTS_JSON` | SKU、型号、容量、颜色和购买页 | 非空 JSON 数组 |
+
+### 门店变量示例
+
+变量名：`MONITOR_STORES_JSON`
+
+```json
+[{"store_number":"R761","store_name":"深圳万象城","city":"深圳"},{"store_number":"R484","store_name":"深圳益田假日广场","city":"深圳"},{"store_number":"R793","store_name":"前海壹方城","city":"深圳"}]
 ```
 
-想换产品 / 换城市就改这几个数组 + 重新部署。
+每项必须有 `store_number`；`store_name`、`city`、`state`、`address` 可选。
+
+### 手机型号与容量变量示例
+
+变量名：`MONITOR_PRODUCTS_JSON`
+
+```json
+[{"part_number":"MJY84CH/A","model":"iPhone 18 Pro Max","capacity":"256GB","color":"勃艮第酒红色","purchase_url":"https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy84ch/a"},{"part_number":"MJYD4CH/A","model":"iPhone 18 Pro Max","capacity":"512GB","color":"勃艮第酒红色","purchase_url":"https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjyd4ch/a"}]
+```
+
+每项必须有 `part_number`、`model`、`capacity`；`color` 和 `purchase_url` 可选。
+
+保存变量后，在 **Deployments** 中重新部署最新版本使配置立即生效。页面上的“监控间隔”、门店、型号、容量和颜色会自动使用这些变量。
+
+> `wrangler.toml` 设置了 `keep_vars = true`，所以通过 Cloudflare Dashboard 修改的变量不会在下一次 Git 自动部署时被删除。Cron 每分钟唤醒一次 Worker，但只有达到 `CHECK_INTERVAL_MINUTES` 时才请求 Apple。
 
 ## 架构
 
 ```
                  ┌────────────────────────────────┐
-                 │ Cloudflare Worker (cron 2min)  │
+                 │ Cloudflare Worker (cron 1min)  │
                  │   src/index.js                 │
                  └───────┬───────────────────────┘
                          │ fetch + ingest
@@ -122,9 +147,9 @@ const VARIANTS = [...] // 展示用的颜色+容量元数据
 
 **为什么用 DO？** Cloudflare Workers 默认无状态，但 cron 抓到结果要广播给"所有当前打开的浏览器"——必须有一个长寿命的 actor 持有这些 SSE 连接。DO 是官方推荐的 fanout 出口。
 
-**为什么 cron 间隔 2 分钟？** Workers 免费层 cron 最小间隔 1 分钟，但 1 分钟一次抓 6 个 SKU×3 家门店 = 18 次/分钟，加上 SSE 心跳还是偏激进。2 分钟是经验值。
+**为什么默认 2 分钟？** Workers 免费层 Cron 最小粒度是 1 分钟。Cron 每分钟唤醒，但默认 `CHECK_INTERVAL_MINUTES=2`，因此 Apple 请求仍是每 2 分钟一次；需要时可以把变量改为 1 或更大的整数。
 
-**为什么 cron 也唤醒 DO？** 浏览器首次打开时 DO 可能是冷的——cron 触发让它在每次启动后 2 分钟内就有新鲜数据可读，避免空白页面。
+**为什么 cron 唤醒 DO？** 定时查询会把最新状态写入 DO，浏览器打开后可直接读取，并通过 SSE 接收后续变化。
 
 ## 隐私 / 费用
 

@@ -5,6 +5,8 @@
  *   - active SSE subscribers for live browser notifications
  */
 
+import { getMonitorConfig } from './config.js';
+
 const LOG_MAX = 100;
 const STORAGE_KEY = 'monitor-state-v1';
 
@@ -12,16 +14,20 @@ export class Room {
   constructor(state, env) {
     this.state = state;
     this.env = env;
+    const config = safeMonitorConfig(env);
     this.log = [];
     this.previousAvailable = [];
     this.lastCheckedAt = null;
     this.lastAttemptAt = null;
-    this.pollSeconds = 120;
+    this.pollSeconds = config.pollSeconds;
     this.pollState = 'healthy';
     this.status = 'starting';
     this.observations = [];
     this.failCount = 0;
     this.lastError = null;
+    this.stores = config.stores;
+    this.variants = config.products;
+    this.sourceUrl = config.sourceUrl;
     this.subscribers = new Set();
 
     state.blockConcurrencyWhile(async () => {
@@ -60,9 +66,9 @@ export class Room {
       available: this.currentAvailable(),
       new_available: [],
       observations: this.observations,
-      stores: Object.values(STORE_INFO),
-      variants: VARIANTS,
-      source_url: SOURCE_URL,
+      stores: this.stores,
+      variants: this.variants,
+      source_url: this.sourceUrl,
       error: this.status === 'query_failed' ? this.lastError : null,
       poll_seconds: this.pollSeconds,
       poll_state: this.pollState,
@@ -127,10 +133,16 @@ export class Room {
     this.lastAttemptAt = nowCst();
     this.failCount = payload.fail_count || 0;
     this.lastCheckedAt = payload.checked_at || this.lastAttemptAt;
+    if (Number.isFinite(payload.poll_seconds) && payload.poll_seconds >= 60) {
+      this.pollSeconds = payload.poll_seconds;
+    }
+    if (Array.isArray(payload.stores) && payload.stores.length) this.stores = payload.stores;
+    if (Array.isArray(payload.products) && payload.products.length) this.variants = payload.products;
+    if (payload.source_url) this.sourceUrl = payload.source_url;
 
-    if (this.failCount >= STORES.length) {
+    if (payload.error || this.failCount > 0) {
       this.status = 'query_failed';
-      this.lastError = payload.error || `${this.failCount}/${STORES.length} stores failed`;
+      this.lastError = payload.error || `${this.failCount} query operations failed`;
       this.appendLog('fail', `tick 失败 · ${this.lastError}`);
       await this.persist();
       for (const c of this.subscribers) {
@@ -148,8 +160,8 @@ export class Room {
     const newlyAvailable = [...currentSet].filter((k) => !previousSet.has(k));
     this.previousAvailable = [...currentSet];
 
-    const newDetail = formatKeys(newlyAvailable, this.observations);
-    const availDetail = formatKeys([...currentSet], this.observations);
+    const newDetail = formatKeys(newlyAvailable, this.observations, this.variants);
+    const availDetail = formatKeys([...currentSet], this.observations, this.variants);
     const msg =
       `tick 成功 · 在售 ${currentSet.size} 个组合` +
       (availDetail ? `（${availDetail}）` : '') +
@@ -167,7 +179,7 @@ export class Room {
         details: newlyAvailable.map((k) => {
           const [part, store] = k.split('|');
           const obs = this.observations.find((o) => o.part_number === part && o.store_number === store);
-          const v = VARIANTS.find((vv) => vv.part_number === part) || {};
+          const v = this.variants.find((vv) => vv.part_number === part) || {};
           return {
             key: k,
             part_number: part,
@@ -192,8 +204,8 @@ export class Room {
 
   async handleTestStock(body) {
     // Forge: pretend some part+store just became available.
-    const part = (body && body.part_number) || 'MJYD4CH/A';
-    const store = (body && body.store_number) || 'R793';
+    const part = (body && body.part_number) || this.variants[0]?.part_number || '';
+    const store = (body && body.store_number) || this.stores[0]?.store_number || '';
     const fake = {
       checked_at: nowCst(),
       observations: this.observations.map((o) => {
@@ -225,6 +237,7 @@ export class Room {
       observations: this.observations,
       failCount: this.failCount,
       lastError: this.lastError,
+      pollSeconds: this.pollSeconds,
     });
   }
 
@@ -234,32 +247,24 @@ export class Room {
   }
 }
 
-const SOURCE_URL = 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy74ch/a';
-const STORES = ['R761', 'R484', 'R793'];
-const VARIANTS = [
-  { part_number: 'MJY84CH/A', color: '勃艮第酒红色', capacity: '256GB' },
-  { part_number: 'MJY94CH/A', color: '冰川蓝色',   capacity: '256GB' },
-  { part_number: 'MJY74CH/A', color: '银色',       capacity: '256GB' },
-  { part_number: 'MJYD4CH/A', color: '勃艮第酒红色', capacity: '512GB' },
-  { part_number: 'MJYE4CH/A', color: '冰川蓝色',   capacity: '512GB' },
-  { part_number: 'MJYC4CH/A', color: '银色',       capacity: '512GB' },
-];
-const STORE_INFO = {
-  R761: { store_number: 'R761', store_name: '深圳万象城' },
-  R484: { store_number: 'R484', store_name: '深圳益田假日广场' },
-  R793: { store_number: 'R793', store_name: '前海壹方城' },
-};
-
-function formatKeys(keys, observations) {
+function formatKeys(keys, observations, variants) {
   if (!keys.length) return '';
   const oBy = new Map(observations.map((o) => [`${o.part_number}|${o.store_number}`, o]));
-  const vBy = new Map(VARIANTS.map((v) => [v.part_number, v]));
+  const vBy = new Map(variants.map((v) => [v.part_number, v]));
   return keys.map((k) => {
     const [part, store] = k.split('|');
     const v = vBy.get(part) || {};
     const o = oBy.get(k) || {};
     return `${part}（${v.color || ''}${v.capacity || ''}）@ ${o.store_name || store}（${store}）`;
   }).join(' · ');
+}
+
+function safeMonitorConfig(env) {
+  try {
+    return getMonitorConfig(env);
+  } catch {
+    return getMonitorConfig({});
+  }
 }
 
 function nowCst() {

@@ -2,10 +2,12 @@ name = "apple-pickup-watch"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 
-# Cron trigger: every 2 minutes (Workers free plan allows cron ≥ 1 min).
-# Trigger also activates cold-starts so DO has fresh data on tab open.
+# Preserve variables edited in Cloudflare Dashboard across Git deployments.
+keep_vars = true
+
+# Wake every minute; CHECK_INTERVAL_MINUTES controls real query frequency.
 [triggers]
-crons = ["*/2 * * * *"]
+crons = ["* * * * *"]
 
 # Durable Object: one Room instance holds all browser SSE subscribers +
 # last-known availability state.
