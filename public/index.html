@@ -232,14 +232,30 @@
       font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
     }
     .picker-manual input:focus { border-color: var(--accent); }
-    .region-tabs { display: inline-flex; gap: 4px; margin-left: 4px; }
+    .region-tabs { display: inline-flex; gap: 6px; margin-left: 6px; flex-wrap: wrap; }
     .region-tab {
+      display: inline-flex; align-items: center; gap: 4px;
       padding: 4px 10px; border: 1px solid var(--border); border-radius: 6px;
       font-size: 12px; background: var(--bg); color: var(--muted);
       cursor: pointer; user-select: none;
     }
-    .region-tab.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-    .region-tab:hover:not(.active) { color: var(--fg); border-color: var(--accent); }
+    .region-tab.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .region-tab.off { color: var(--muted); }
+    .region-tab:hover { border-color: var(--accent); }
+    .region-tab .check {
+      display: inline-block; width: 12px; height: 12px; border: 1px solid currentColor;
+      border-radius: 3px; position: relative;
+    }
+    .region-tab.on .check::after {
+      content: '✓'; position: absolute; left: 1px; top: -3px; font-size: 11px; font-weight: 700;
+    }
+    .picker-region-label {
+      display: inline-block; padding: 1px 6px; border-radius: 4px;
+      font-size: 10px; background: var(--bg); border: 1px solid var(--border);
+      color: var(--muted); margin-right: 4px;
+    }
+    .picker-region-label.cn { color: #6aa9ff; border-color: rgba(106,169,255,.4); }
+    .picker-region-label.hk { color: #f39c12; border-color: rgba(243,156,18,.4); }
     .selected-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .selected-list:empty { display: none; }
     .settings-message { color: var(--muted); font-size: 12px; }
@@ -289,41 +305,41 @@
             <input id="interval-input" type="number" min="10" max="86400" step="1" inputmode="numeric" />
           </div>
           <div class="field" style="grid-column:span 2;">
-            <span class="muted" style="font-size:11px;">支持 region：</span>
+            <span class="muted" style="font-size:11px;">支持的 region（多选）：</span>
             <span class="region-tabs" id="region-tabs"></span>
-            <span class="muted" style="font-size:11px;margin-left:12px;">当前 region 的位置 / 邮编：</span>
+            <span class="muted" style="font-size:11px;margin-left:12px;">主 region 的位置 / 邮编：</span>
             <input id="location-input" type="text" placeholder="例如 518000 / 中環" style="display:inline-block;width:160px;margin-left:6px;" />
           </div>
         </div>
-        <div class="picker">
-          <div class="picker-header">
-            <strong style="font-size:13px;">📱 手机型号 · 容量 · 颜色</strong>
-            <span class="picker-status" id="product-picker-status">首次打开自动拉取 Apple 在售 SKU</span>
-            <button class="refresh-btn" id="product-refresh-btn">重新拉取</button>
+          <div class="picker" data-region="cn">
+            <div class="picker-header">
+              <strong style="font-size:13px;">📱 手机型号 · 容量 · 颜色 <span class="picker-region-label cn">大陆</span> <span class="picker-region-label hk">港</span></strong>
+              <span class="picker-status" id="product-picker-status">首次打开自动拉取 Apple 在售 SKU</span>
+              <button class="refresh-btn" id="product-refresh-btn">重新拉取</button>
+            </div>
+            <input type="search" id="product-search" placeholder="搜索 iPhone 17 Pro、512GB、酒红色…" autocomplete="off">
+            <div class="picker-list" id="product-picker-list"></div>
+            <div class="picker-manual">
+              <label class="picker-manual-label" for="manual-part-input">也可直接输入 Apple part_number（多个用空格 / 逗号分隔；CH/A 用于大陆 / ZA/A 用于香港；不带后缀将按当前已启用 region 自动补全）</label>
+              <input id="manual-part-input" type="text" placeholder="MJY84CH/A MJYD4CH/A / MJXW4ZA/A" autocomplete="off">
+            </div>
+            <div class="selected-list" id="product-selected-list"></div>
           </div>
-          <input type="search" id="product-search" placeholder="搜索 iPhone 17 Pro、512GB、酒红色…" autocomplete="off">
-          <div class="picker-list" id="product-picker-list"></div>
-          <div class="picker-manual">
-            <label class="picker-manual-label" for="manual-part-input">也可直接输入 Apple part_number（多个用空格 / 逗号分隔，例如 <code>MJY84CH/A MJYD4CH/A</code>）</label>
-            <input id="manual-part-input" type="text" placeholder="MJY84CH/A MJYD4CH/A ..." autocomplete="off">
-          </div>
-          <div class="selected-list" id="product-selected-list"></div>
-        </div>
 
-        <div class="picker">
-          <div class="picker-header">
-            <strong style="font-size:13px;">📍 监控 Apple Store</strong>
-            <span class="picker-status" id="store-picker-status">输入城市/邮编，例：北京、上海、510000</span>
-            <button class="refresh-btn" id="store-refresh-btn">重新搜索</button>
+          <div class="picker" data-region="store">
+            <div class="picker-header">
+              <strong style="font-size:13px;">📍 监控 Apple Store（合并显示所有启用 region 的附近门店）</strong>
+              <span class="picker-status" id="store-picker-status">输入城市/邮编，例：北京、上海、510000、中環</span>
+              <button class="refresh-btn" id="store-refresh-btn">重新搜索</button>
+            </div>
+            <input type="search" id="store-search" placeholder="输入城市、邮编或地址" autocomplete="off">
+            <div class="picker-list" id="store-picker-list"></div>
+            <div class="picker-manual">
+              <label class="picker-manual-label" for="manual-store-input">也可直接输入 Apple store_number（多个用空格 / 逗号分隔，例如 <code>R761 R484 R793 R428</code>）</label>
+              <input id="manual-store-input" type="text" placeholder="R761 R484 R793 R428 ..." autocomplete="off">
+            </div>
+            <div class="selected-list" id="store-selected-list"></div>
           </div>
-          <input type="search" id="store-search" placeholder="输入城市、邮编或地址" autocomplete="off">
-          <div class="picker-list" id="store-picker-list"></div>
-          <div class="picker-manual">
-            <label class="picker-manual-label" for="manual-store-input">也可直接输入 Apple store_number（多个用空格 / 逗号分隔，例如 <code>R761 R484 R793</code>）</label>
-            <input id="manual-store-input" type="text" placeholder="R761 R484 R793 ..." autocomplete="off">
-          </div>
-          <div class="selected-list" id="store-selected-list"></div>
-        </div>
 
         <div class="settings-fields" style="margin-top:15px;margin-bottom:0;">
           <div class="field">
@@ -424,11 +440,11 @@
   let settingsDirty = false;
   let settingsLoaded = false;
 
-  // Multi-region state. `regions` is keyed by region id (`cn`, `hk`).
-  // Each entry exposes `products` and `stores` catalogues and `settings`
-  // (the per-region sub-object).  The dashboard renders the current
-  // region's data and lets the user switch tabs to edit the other.
-  let activeRegion = 'cn';
+  // Multi-region state.  Users can enable any subset of CN + HK (both at
+  // once or just one).  `enabledRegions` is the set of regions currently
+  // toggled on; the catalogue and selected SKU/store lists for each region
+  // are merged for display.
+  let enabledRegions = new Set(['cn']);
   const regions = {
     cn: { products: [], stores: [], settings: null, label: '中国大陆', partSuffix: 'CH/A' },
     hk: { products: [], stores: [], settings: null, label: '香港', partSuffix: 'ZA/A' },
@@ -522,6 +538,69 @@
     }[char]));
   }
 
+  // Default SKU / store seed used when the catalogue is empty so the picker
+  // is never blank.  Each region's seed lives in config.js; we mirror the
+  // values here so the page can render without a round-trip.
+  const SEED_PRODUCTS = {
+    cn: [
+      { part_number: 'MJY84CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '勃艮第酒红色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy84ch/a' },
+      { part_number: 'MJY94CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '冰川蓝色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy94ch/a' },
+      { part_number: 'MJY74CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '银色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjy74ch/a' },
+      { part_number: 'MJYD4CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '勃艮第酒红色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjyd4ch/a' },
+      { part_number: 'MJYE4CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '冰川蓝色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjye4ch/a' },
+      { part_number: 'MJYC4CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '银色', purchase_url: 'https://www.apple.com.cn/shop/buy-iphone/iphone-18-pro/mjyc4ch/a' },
+    ],
+    hk: [],
+  };
+  const SEED_STORES = {
+    cn: [
+      { region: 'cn', store_number: 'R761', store_name: '深圳万象城', city: '深圳', state: '广东', address: '深圳市罗湖区宝安南路 1881 号 深圳万象城（一期）B1 层' },
+      { region: 'cn', store_number: 'R484', store_name: '深圳益田假日广场', city: '深圳', state: '广东', address: '深圳市南山区深南大道 9028 号益田假日广场' },
+      { region: 'cn', store_number: 'R793', store_name: '前海壹方城', city: '深圳', state: '广东', address: '深圳市宝安区新湖路 99 号 前海壹方城 L1 层' },
+    ],
+    hk: [],
+  };
+
+  function mergeRegionCatalogue(target, regionId) {
+    // Prefer live catalogue if available, otherwise fall back to seed.
+    const live = regions[regionId]?.products || [];
+    if (live.length) return live;
+    return SEED_PRODUCTS[regionId] || [];
+  }
+
+  function mergeRegionStores(regionId) {
+    const live = regions[regionId]?.stores || [];
+    if (live.length) return live;
+    return SEED_STORES[regionId] || [];
+  }
+
+  function allSelectedProducts() {
+    const set = new Set();
+    for (const regionId of enabledRegions) {
+      const rs = regions[regionId]?.settings || {};
+      for (const pn of (rs.part_numbers || [])) set.add(pn);
+    }
+    for (const v of parseManualTokens(manualPartInput.value)) set.add(v);
+    return set;
+  }
+
+  function allSelectedStores() {
+    const set = new Set();
+    for (const regionId of enabledRegions) {
+      const rs = regions[regionId]?.settings || {};
+      for (const sn of (rs.store_numbers || [])) set.add(sn);
+    }
+    for (const v of parseManualTokens(manualStoreInput.value)) set.add(v);
+    return set;
+  }
+
+  function locationForPrimary() {
+    // The location input drives the active region's location.  We
+    // auto-detect "primary" as the first enabled region, or `cn` as a fallback.
+    const primary = [...enabledRegions][0] || 'cn';
+    return regions[primary]?.settings?.location || '';
+  }
+
   function renderSettings(data) {
     const settings = data?.settings;
     if (!settings) return;
@@ -532,27 +611,46 @@
     intervalInput.max = 86400;
     intervalInput.value = intervalSeconds;
 
-    // Catalogue may be the new byRegion shape (from /api/state and /api/settings)
-    // or the legacy flat shape; pull per-region data accordingly.
     const byRegionCatalog = data?.catalog?.byRegion || {};
+    enabledRegions = new Set();
     for (const regionId of Object.keys(regions)) {
       const bucket = byRegionCatalog[regionId] || {};
       regions[regionId].products = Array.isArray(bucket.products) ? bucket.products : [];
       regions[regionId].stores = Array.isArray(bucket.stores) ? bucket.stores : [];
       regions[regionId].settings = settings.regions?.[regionId] || null;
+      if (regions[regionId].settings?.enabled !== false) enabledRegions.add(regionId);
     }
+    if (!enabledRegions.size) enabledRegions.add('cn');
 
-    // Render region tabs.
     regionTabs.innerHTML = Object.keys(regions).map((regionId) => {
       const r = regions[regionId];
-      const r2 = settings.regions?.[regionId] || {};
-      const enabled = r2.enabled !== false;
-      return `<span class="region-tab ${regionId === activeRegion ? 'active' : ''}" data-region="${regionId}">${escapeHtml(r.label)}${enabled ? '' : ' · 停用'}</span>`;
+      const enabled = enabledRegions.has(regionId);
+      return `<span class="region-tab ${enabled ? 'on' : 'off'}" data-region="${regionId}"><span class="check"></span>${escapeHtml(r.label)}</span>`;
     }).join('');
     regionTabs.querySelectorAll('.region-tab').forEach((el) => {
       el.addEventListener('click', () => {
-        activeRegion = el.dataset.region;
+        const regionId = el.dataset.region;
+        if (enabledRegions.has(regionId)) {
+          // Don't allow disabling the last enabled region.
+          if (enabledRegions.size > 1) enabledRegions.delete(regionId);
+          else {
+            // Last one — toggle the location for it as a hint.
+            return;
+          }
+        } else {
+          enabledRegions.add(regionId);
+        }
         renderRegion();
+        // Re-render tabs to reflect new state.
+        regionTabs.innerHTML = Object.keys(regions).map((regionId2) => {
+          const r2 = regions[regionId2];
+          const en = enabledRegions.has(regionId2);
+          return `<span class="region-tab ${en ? 'on' : 'off'}" data-region="${regionId2}"><span class="check"></span>${escapeHtml(r2.label)}</span>`;
+        }).join('');
+        regionTabs.querySelectorAll('.region-tab').forEach((el2) => {
+          el2.addEventListener('click', el2._toggle || (el2._toggle = () => el2.click()));
+        });
+        renderPicker();
       });
     });
 
@@ -561,25 +659,43 @@
   }
 
   function renderRegion() {
-    const r = regions[activeRegion];
-    const rs = r.settings || { enabled: false, location: '', store_numbers: [], part_numbers: [], keyword_alert: '' };
-    locationInput.value = rs.location || '';
-    keywordAlertInput.value = rs.keyword_alert || '';
-    const tokens = (rs.keyword_alert || '').split('|').map((s) => s.trim()).filter(Boolean);
-    similarKeywordPill.textContent = tokens.length ? tokens.join(' · ') : '—（仅提醒当前 region 勾选型号）';
+    locationInput.value = locationForPrimary();
+    renderPicker();
+  }
 
-    renderProductPicker(r.products, new Set(rs.part_numbers || []), productFilterText);
-    renderStorePicker(r.stores, new Set(rs.store_numbers || []), storeFilterText);
-    productSearch.value = productFilterText;
-    if (!storeSearch.value && rs.location) storeSearch.value = rs.location;
-    if (!productPickerStatus.dataset.touched) {
-      productPickerStatus.textContent = r.products.length
-        ? `${activeRegion} · ${r.products.length} 个 SKU 已加载`
-        : `${activeRegion} · 尚未拉取 SKU`;
+  function renderPicker() {
+    const productCatalogue = [];
+    for (const regionId of enabledRegions) {
+      for (const p of mergeRegionCatalogue(null, regionId)) {
+        productCatalogue.push({ ...p, region: p.region || regionId });
+      }
     }
-    storePickerStatus.textContent = r.stores.length
-      ? `${activeRegion} · ${r.stores.length} 家店已加载`
-      : `${activeRegion} · 请输入城市或邮编`;
+    const storeCatalogue = [];
+    for (const regionId of enabledRegions) {
+      for (const s of mergeRegionStores(regionId)) {
+        storeCatalogue.push({ ...s, region: s.region || regionId });
+      }
+    }
+    const selectedProducts = allSelectedProducts();
+    const selectedStores = allSelectedStores();
+    renderProductPicker(productCatalogue, selectedProducts, productFilterText);
+    renderStorePicker(storeCatalogue, selectedStores, storeFilterText);
+    if (!productPickerStatus.dataset.touched) {
+      productPickerStatus.textContent = productCatalogue.length
+        ? `已合并 ${enabledRegions.size} 个 region · ${productCatalogue.length} 个 SKU`
+        : `点击「重新拉取」从 Apple 官网同步，或在下方直接输入 part_number`;
+    }
+    if (!storePickerStatus.dataset.touched) {
+      storePickerStatus.textContent = storeCatalogue.length
+        ? `已合并 ${enabledRegions.size} 个 region · ${storeCatalogue.length} 家店`
+        : `输入城市/邮编后点击「重新搜索」，或在下方直接输入 store_number`;
+    }
+    // Keyword reminder text reflects the primary enabled region's alert.
+    const primary = [...enabledRegions][0] || 'cn';
+    const rs = regions[primary]?.settings || {};
+    const tokens = (rs.keyword_alert || '').split('|').map((s) => s.trim()).filter(Boolean);
+    keywordAlertInput.value = rs.keyword_alert || '';
+    similarKeywordPill.textContent = tokens.length ? tokens.join(' · ') : '—（仅提醒当前 region 勾选型号）';
   }
 
   let productFilterText = '';
@@ -608,12 +724,12 @@
     const merged = augmentCatalogue([...all], selected, 'product');
     if (!merged.length) {
       productPickerList.innerHTML = '<div class="picker-empty">还没有可用的 iPhone SKU。点击「重新拉取」从 Apple 官网同步，或直接在下方手动输入 part_number。</div>';
-      productPickerStatus.textContent = `${activeRegion} · 尚未拉取 SKU`;
+      productPickerStatus.textContent = '尚未拉取 SKU';
       productSelectedList.innerHTML = '';
       return;
     }
     const filtered = !term ? merged : merged.filter((p) => {
-      const hay = `${p.model || ''} ${p.capacity || ''} ${p.color || ''} ${p.part_number || ''}`.toLowerCase();
+      const hay = `${p.model || ''} ${p.capacity || ''} ${p.color || ''} ${p.part_number || ''} ${p.region || ''}`.toLowerCase();
       return hay.includes(term);
     });
     if (!filtered.length) {
@@ -623,12 +739,13 @@
         <label class="picker-item ${p._manual ? 'manual' : ''}">
           <input type="checkbox" data-part-number="${escapeHtml(p.part_number)}" data-kind="product" ${selected.has(p.part_number) ? 'checked' : ''}>
           <span>
+            <span class="picker-region-label ${p.region || 'cn'}">${p.region === 'hk' ? '港' : '大陆'}</span>
             <strong>${escapeHtml(p.model || '手动输入 SKU')}</strong> · ${escapeHtml(p.capacity || '')}
             <span class="sub">${escapeHtml(p.color || '')} · ${escapeHtml(p.part_number)}${p._manual ? ' · 手动' : ''}</span>
           </span>
         </label>`).join('');
     }
-    productPickerStatus.textContent = `${activeRegion} · 共 ${merged.length} 个 SKU · 显示 ${filtered.length} 个 · 已选 ${selected.size}`;
+    productPickerStatus.textContent = `已合并 ${enabledRegions.size} 个 region · 共 ${merged.length} 个 SKU · 显示 ${filtered.length} 个 · 已选 ${selected.size}`;
     renderSelectedProducts(merged, selected);
   }
 
@@ -646,12 +763,12 @@
     const merged = augmentCatalogue([...all], selected, 'store');
     if (!merged.length) {
       storePickerList.innerHTML = '<div class="picker-empty">还没有可用的 Apple Store。输入城市/邮编后点击「重新搜索」，或在下方手动输入 store_number。</div>';
-      storePickerStatus.textContent = `${activeRegion} · 请输入城市或邮编`;
+      storePickerStatus.textContent = '请输入城市或邮编';
       storeSelectedList.innerHTML = '';
       return;
     }
     const filtered = !term ? merged : merged.filter((s) => {
-      const hay = `${s.store_name || ''} ${s.city || ''} ${s.state || ''} ${s.store_number || ''} ${s.address || ''}`.toLowerCase();
+      const hay = `${s.store_name || ''} ${s.city || ''} ${s.state || ''} ${s.store_number || ''} ${s.address || ''} ${s.region || ''}`.toLowerCase();
       return hay.includes(term);
     });
     if (!filtered.length) {
@@ -661,12 +778,13 @@
         <label class="picker-item ${s._manual ? 'manual' : ''}">
           <input type="checkbox" data-store-number="${escapeHtml(s.store_number)}" data-kind="store" ${selected.has(s.store_number) ? 'checked' : ''}>
           <span>
+            <span class="picker-region-label ${s.region || 'cn'}">${s.region === 'hk' ? '港' : '大陆'}</span>
             <strong>${escapeHtml(s.store_name)}</strong>
             <span class="sub">${escapeHtml(s.city || '')} · ${escapeHtml(s.store_number)}${s._manual ? ' · 手动' : ''}</span>
           </span>
         </label>`).join('');
     }
-    storePickerStatus.textContent = `${activeRegion} · 共 ${merged.length} 家店 · 显示 ${filtered.length} 家 · 已选 ${selected.size}`;
+    storePickerStatus.textContent = `已合并 ${enabledRegions.size} 个 region · 共 ${merged.length} 家店 · 显示 ${filtered.length} 家 · 已选 ${selected.size}`;
     renderSelectedStores(merged, selected);
   }
 
@@ -681,7 +799,7 @@
 
   productSearch.addEventListener('input', () => {
     productFilterText = productSearch.value;
-    renderProductPicker(productCatalogue, readSelectedProducts(), productFilterText);
+    renderPicker();
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
@@ -689,7 +807,7 @@
 
   storeSearch.addEventListener('input', () => {
     storeFilterText = storeSearch.value;
-    renderStorePicker(storeCatalogue, readSelectedStores(), storeFilterText);
+    renderPicker();
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
@@ -699,13 +817,13 @@
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderProductPicker(regions[activeRegion].products, readSelectedProducts(), productFilterText);
+    renderPicker();
   });
   storePickerList.addEventListener('change', () => {
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderStorePicker(regions[activeRegion].stores, readSelectedStores(), storeFilterText);
+    renderPicker();
   });
 
   productRefreshBtn.addEventListener('click', () => refreshProducts(productSearch.value.trim()));
@@ -713,23 +831,44 @@
 
   async function refreshProducts(query) {
     productRefreshBtn.disabled = true;
-    productPickerStatus.textContent = query ? `${activeRegion} 搜索中：${query}…` : `${activeRegion} 拉取 Apple 在售 SKU 中…`;
+    const regionList = [...enabledRegions];
+    productPickerStatus.textContent = query
+      ? `${regionList.join('+')} 搜索中：${query}…`
+      : `${regionList.join('+')} 拉取 Apple 在售 SKU 中…`;
     try {
-      const params = new URLSearchParams({ region: activeRegion });
-      if (query) params.set('q', query);
-      const res = await fetch(`/api/search/products?${params.toString()}`);
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      const products = Array.isArray(json.products) ? json.products : [];
-      regions[activeRegion].products = products;
+      const allProducts = [];
+      const errors = [];
+      for (const regionId of regionList) {
+        const params = new URLSearchParams({ region: regionId });
+        if (query) params.set('q', query);
+        const res = await fetch(`/api/search/products?${params.toString()}`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.ok) {
+          errors.push(`${regions[regionId].label}: ${json.error || res.status}`);
+          continue;
+        }
+        const items = Array.isArray(json.products) ? json.products : [];
+        for (const item of items) allProducts.push({ ...item, region: regionId });
+        regions[regionId].products = items;
+      }
       productFilterText = productSearch.value;
-      renderProductPicker(products, readSelectedProducts(), productFilterText);
-      // Persist into DO so the catalogue survives reloads.
-      fetch('/api/catalog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ region: activeRegion, products: true, stores: false, locations: { [activeRegion]: locationInput.value.trim() } }),
-      }).catch(() => {});
+      renderProductPicker(allProducts, allSelectedProducts(), productFilterText);
+      if (errors.length) {
+        productPickerStatus.textContent = `部分 region 拉取失败：${errors.join('；')}（用内置种子继续）`;
+      }
+      // Persist catalogue (don't wait for each).
+      for (const regionId of regionList) {
+        fetch('/api/catalog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            region: regionId,
+            products: true,
+            stores: false,
+            locations: { [regionId]: locationInput.value.trim() },
+          }),
+        }).catch(() => {});
+      }
     } catch (err) {
       productPickerStatus.textContent = `拉取失败：${err.message || err}`;
     } finally {
@@ -739,22 +878,41 @@
 
   async function refreshStores(query) {
     storeRefreshBtn.disabled = true;
-    storePickerStatus.textContent = `${activeRegion} 搜索附近门店：${query || '默认位置'}…`;
+    const regionList = [...enabledRegions];
+    storePickerStatus.textContent = `${regionList.join('+')} 搜索附近门店：${query || '默认位置'}…`;
     try {
-      const params = new URLSearchParams({ region: activeRegion });
-      if (query) params.set('q', query);
-      const res = await fetch(`/api/search/stores?${params.toString()}`);
-      const json = await res.json().catch(() => ({}));
-      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
-      const stores = Array.isArray(json.stores) ? json.stores : [];
-      regions[activeRegion].stores = stores;
+      const allStores = [];
+      const errors = [];
+      for (const regionId of regionList) {
+        const params = new URLSearchParams({ region: regionId });
+        if (query) params.set('q', query);
+        const res = await fetch(`/api/search/stores?${params.toString()}`);
+        const json = await res.json().catch(() => ({}));
+        if (!res.ok || !json.ok) {
+          errors.push(`${regions[regionId].label}: ${json.error || res.status}`);
+          continue;
+        }
+        const items = Array.isArray(json.stores) ? json.stores : [];
+        for (const item of items) allStores.push({ ...item, region: regionId });
+        regions[regionId].stores = items;
+      }
       storeFilterText = storeSearch.value;
-      renderStorePicker(stores, readSelectedStores(), storeFilterText);
-      fetch('/api/catalog', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ region: activeRegion, products: false, stores: true, locations: { [activeRegion]: query || locationInput.value.trim() } }),
-      }).catch(() => {});
+      renderStorePicker(allStores, allSelectedStores(), storeFilterText);
+      if (errors.length) {
+        storePickerStatus.textContent = `部分 region 拉取失败：${errors.join('；')}（用内置种子继续）`;
+      }
+      for (const regionId of regionList) {
+        fetch('/api/catalog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            region: regionId,
+            products: false,
+            stores: true,
+            locations: { [regionId]: query || locationInput.value.trim() },
+          }),
+        }).catch(() => {});
+      }
     } catch (err) {
       storePickerStatus.textContent = `搜索失败：${err.message || err}`;
     } finally {
@@ -784,13 +942,13 @@
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderProductPicker(regions[activeRegion].products, readSelectedProducts(), productFilterText);
+    renderPicker();
   });
   manualStoreInput.addEventListener('input', () => {
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderStorePicker(regions[activeRegion].stores, readSelectedStores(), storeFilterText);
+    renderPicker();
   });
 
   async function bootstrapCatalogue() {
@@ -844,25 +1002,25 @@
   });
 
   function collectRegionPayload() {
-    // Walk every region: read the current view's picks for `activeRegion`
-    // and the DOM-checked values for the others (we re-render each region
-    // to pull DOM values when collecting).  Manual input box values stay
-    // scoped to the active region in the DOM; for non-active regions we
-    // pull from `regions[id].settings` and merge the active one's edits.
     const out = {};
     for (const regionId of Object.keys(regions)) {
-      if (regionId === activeRegion) {
+      const enabled = enabledRegions.has(regionId);
+      const prev = regions[regionId].settings || {};
+      if (enabled && regionId === [...enabledRegions][0]) {
+        // The first (primary) enabled region uses the location input the
+        // user just edited.  Other regions keep their stored location, or
+        // fall back to the primary's location when they had none.
+        const ownLocation = (prev.location || '').trim();
         out[regionId] = {
           enabled: true,
-          location: locationInput.value.trim(),
+          location: locationInput.value.trim() || ownLocation || prev.location || '',
           store_numbers: [...readSelectedStores()],
           part_numbers: [...readSelectedProducts()],
           keyword_alert: keywordAlertInput.value.trim(),
         };
       } else {
-        const prev = regions[regionId].settings || {};
         out[regionId] = {
-          enabled: prev.enabled !== false,
+          enabled,
           location: prev.location || '',
           store_numbers: [...(prev.store_numbers || [])],
           part_numbers: [...(prev.part_numbers || [])],
@@ -918,7 +1076,8 @@
       settingsLoaded = false;
       settingsMessage.textContent = '保存成功，已安排立即检测';
       settingsMessage.className = 'settings-message ok';
-      showToast('设置已保存', `每 ${result.settings.interval_seconds} 秒检测一次`);
+      const regionSummary = enabledRegions.map((id) => regions[id].label).join(' + ');
+      showToast('设置已保存', `${regionSummary} · 每 ${result.settings.interval_seconds} 秒`);
       await fetchState();
       await fetchLog();
     } catch (err) {
@@ -1074,7 +1233,8 @@
 
   async function init() {
     await fetchState();
-    if (!productCatalogue.length || !storeCatalogue.length) {
+    const catalogueSparse = Object.values(regions).every((r) => !r.products.length && !r.stores.length);
+    if (catalogueSparse) {
       await bootstrapCatalogue();
       await fetchState();
     } else {
