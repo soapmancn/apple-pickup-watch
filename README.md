@@ -18,9 +18,9 @@ iPhone 18 Pro Max 深圳三家 Apple Store 到店库存监控，部署在 Cloudf
 
 > 想跳过本地环境直接部署？点下面按钮，从 GitHub 一键导入到 Cloudflare Workers：
 >
-> [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/soapmancn/apple-pickup-watch)
+> [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fworkers-and-pages%2Fcreate)
 >
-> 按钮会把仓库 fork 到你的 GitHub 然后引导你授权 Cloudflare + 设置 `ADMIN_KEY`（可选）。完成后你会在 Workers 控制台看到部署好的项目，URL 类似 `apple-pickup-watch.<your-subdomain>.workers.dev`。
+> 按钮会把你带到 Cloudflare Workers 创建流程的"选择一种方法"页。点 **Continue with GitHub** → 授权你的 `soapmancn` 账号 → 选模板 / 直接从仓库部署 → 完成。完成后你会在 Workers 控制台看到部署好的项目，URL 类似 `apple-pickup-watch.<your-subdomain>.workers.dev`。
 
 #### 或者本地手动部署
 
