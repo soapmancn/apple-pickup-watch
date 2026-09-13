@@ -1,205 +1,296 @@
 /**
- * Apple CN catalog and pickup-message client.
+ * Apple CN + HK catalog and pickup client.
  *
- * - `fetchFamilyProducts(familySlug)` scrapes an Apple buy-iphone family page
- *   (e.g. `iphone-18-pro`) to enumerate every current SKU (part_number +
- *   capacity + colour + price + purchase_url).  The page itself is a gzipped
- *   HTML document returned by www.apple.com.cn and contains `<a href="...
- *   /shop/buy-iphone/<family>/<part>/a">` blocks with `dimensionCapacity`,
- *   `dimensionColor` and `current_price` spans.  No authentication required.
- * - `fetchAppleStores(location)` calls the existing public pickup-message
- *   endpoint with a single known part number and any location/邮编; Apple
- *   responds with the nearby store list regardless of the parts passed, so we
- *   can use it to discover stores in any city.
- * - `fetchPickupObservations(config)` returns the filtered observations for the
- *   user-selected parts × stores at the user-selected location.
+ * Both regions share the same JSON shape; the base URL and part suffix differ:
+ *   CN: https://www.apple.com.cn/shop/{buy-iphone|retail/pickup-message|pickup-message-recommendations}
+ *   HK: https://www.apple.com/hk-zh/shop/...
+ *
+ * Exposed helpers:
+ *   listRegions()                       — [{id, label, ...}]
+ *   getRegion(id)                       — full region object
+ *   fetchFamilyProducts(region, slug)
+ *   fetchAllFamilyProducts(region)
+ *   searchProducts(region, query)
+ *   fetchAppleStores(region, location)
+ *   fetchPickupObservations(region, config)
+ *   fetchSimilarAvailability(region, config)
+ *
+ * No authentication required; responses are gzip JSON (or HTML for the
+ * buy-iphone family pages).
  */
 
-const FAMILY_SLUGS = [
-  'iphone-18-pro',
-  'iphone-air',
-  'iphone-17',
-  'iphone-17e',
-  'iphone-16',
+const REGIONS = [
+  {
+    id: 'cn',
+    label: '中国大陆',
+    default_location: '518000',
+    pickup_url: 'https://www.apple.com.cn/shop/retail/pickup-message',
+    recommendations_url: 'https://www.apple.com.cn/shop/pickup-message-recommendations',
+    family_base: 'https://www.apple.com.cn/shop/buy-iphone',
+    search_url: 'https://www.apple.com.cn/shop/searchresults/internalmvc',
+    part_suffix: 'CH/A',
+    locale: 'zh-CN,zh;q=0.9',
+    purchase_base: 'https://www.apple.com.cn/shop/buy-iphone',
+    family_slugs: [
+      'iphone-18-pro',
+      'iphone-air',
+      'iphone-17',
+      'iphone-17e',
+      'iphone-16',
+    ],
+    family_labels: {
+      'iphone-18-pro': 'iPhone 18 Pro / Pro Max',
+      'iphone-air': 'iPhone Air',
+      'iphone-17': 'iPhone 17',
+      'iphone-17e': 'iPhone 17e',
+      'iphone-16': 'iPhone 16',
+    },
+  },
+  {
+    id: 'hk',
+    label: '香港',
+    default_location: '中環',
+    pickup_url: 'https://www.apple.com/hk-zh/shop/retail/pickup-message',
+    recommendations_url: 'https://www.apple.com/hk-zh/shop/pickup-message-recommendations',
+    family_base: 'https://www.apple.com/hk-zh/shop/buy-iphone',
+    search_url: 'https://www.apple.com/hk-zh/shop/searchresults/internalmvc',
+    part_suffix: 'ZA/A',
+    locale: 'zh-HK,zh;q=0.9',
+    purchase_base: 'https://www.apple.com/hk-zh/shop/buy-iphone',
+    family_slugs: [
+      'iphone-18-pro',
+      'iphone-air',
+      'iphone-17',
+      'iphone-17e',
+      'iphone-16',
+    ],
+    family_labels: {
+      'iphone-18-pro': 'iPhone 18 Pro / Pro Max',
+      'iphone-air': 'iPhone Air',
+      'iphone-17': 'iPhone 17',
+      'iphone-17e': 'iPhone 17e',
+      'iphone-16': 'iPhone 16',
+    },
+  },
 ];
 
-const FAMILY_LABELS = {
-  'iphone-18-pro': 'iPhone 18 Pro / Pro Max',
-  'iphone-air': 'iPhone Air',
-  'iphone-17': 'iPhone 17',
-  'iphone-17e': 'iPhone 17e',
-  'iphone-16': 'iPhone 16',
+const FAMILY_TTL_MS = 1000 * 60 * 60 * 12;
+const STORE_TTL_MS = 1000 * 60 * 60 * 6;
+
+const familyCache = new Map();   // `${region}|${slug}` -> { products, expiresAt }
+const storeCache = new Map();    // `${region}|${location}` -> { stores, expiresAt }
+const storesByNumber = new Map(); // `${region}|${store_number}` -> store
+
+const DISCOVERY_PART = {
+  cn: 'MJY84CH/A',
+  hk: 'MJXW4ZA/A',
 };
 
-const PICKUP_URL = 'https://www.apple.com.cn/shop/retail/pickup-message';
-const FAMILY_URL = (slug) => `https://www.apple.com.cn/shop/buy-iphone/${slug}`;
-const SEARCH_URL = 'https://www.apple.com.cn/shop/searchresults/internalmvc';
-const USER_AGENT =
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 ' +
-  '(KHTML, like Gecko) Version/17.5 Safari/605.1.15';
-
-const FAMILY_TTL_MS = 1000 * 60 * 60 * 12; // 12h
-const STORE_TTL_MS = 1000 * 60 * 60 * 6;   // 6h
-
-const familyCache = new Map();   // slug -> { products, expiresAt }
-const storeCache = new Map();    // location -> { stores, expiresAt }
-const storesByNumber = new Map(); // store_number -> store object
-
-const DISCOVERY_PART = 'MJY84CH/A'; // any valid iPhone 18 Pro part; helps Apple return nearby stores
-
-export function listFamilySlugs() {
-  return [...FAMILY_SLUGS];
+export function listRegions() {
+  return REGIONS.map((region) => ({ ...region }));
 }
 
-export function familyLabel(slug) {
-  return FAMILY_LABELS[slug] || slug;
+export function getRegion(id) {
+  return REGIONS.find((region) => region.id === id) || null;
 }
 
-export async function fetchFamilyProducts(slug, fetchImpl = fetch) {
-  const cached = familyCache.get(slug);
+export function familyLabel(regionId, slug) {
+  const region = getRegion(regionId);
+  if (!region) return slug;
+  return region.family_labels[slug] || slug;
+}
+
+export async function fetchFamilyProducts(regionId, slug, fetchImpl = fetch) {
+  const region = getRegion(regionId);
+  if (!region) throw new Error(`unknown region ${regionId}`);
+  const cacheKey = `${regionId}|${slug}`;
+  const cached = familyCache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expiresAt > now) return cached.products;
 
-  const response = await fetchImpl(FAMILY_URL(slug), {
+  const url = `${region.family_base}/${slug}`;
+  const response = await fetchImpl(url, {
     headers: {
       'User-Agent': USER_AGENT,
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
+      'Accept-Language': region.locale,
       'Accept-Encoding': 'gzip, br',
     },
   });
   if (!response.ok) {
-    throw new Error(`failed to fetch ${slug}: HTTP ${response.status}`);
+    throw new Error(`failed to fetch ${regionId}/${slug}: HTTP ${response.status}`);
   }
   const buffer = await response.arrayBuffer();
   const html = await decodeHtml(buffer);
-  const products = parseFamilyProducts(html, slug);
-  familyCache.set(slug, { products, expiresAt: now + FAMILY_TTL_MS });
+  const products = parseFamilyProducts(html, region, slug);
+  familyCache.set(cacheKey, { products, expiresAt: now + FAMILY_TTL_MS });
   return products;
 }
 
-export async function fetchAllFamilyProducts(fetchImpl = fetch) {
+export async function fetchAllFamilyProducts(regionId, fetchImpl = fetch) {
+  const region = getRegion(regionId);
+  if (!region) throw new Error(`unknown region ${regionId}`);
   const all = [];
-  for (const slug of FAMILY_SLUGS) {
+  for (const slug of region.family_slugs) {
     try {
-      const items = await fetchFamilyProducts(slug, fetchImpl);
+      const items = await fetchFamilyProducts(regionId, slug, fetchImpl);
       for (const item of items) all.push(item);
     } catch (err) {
-      console.warn('skip family', slug, err.message || err);
+      console.warn(`skip ${regionId}/${slug}`, err.message || err);
     }
   }
   return all;
 }
 
-export async function fetchAppleStores(location, fetchImpl = fetch) {
-  const key = String(location || '').trim() || '518000';
-  const cached = storeCache.get(key);
+export async function fetchAppleStores(regionId, location, fetchImpl = fetch) {
+  const region = getRegion(regionId);
+  if (!region) throw new Error(`unknown region ${regionId}`);
+  const key = String(location || '').trim() || region.default_location;
+  const cacheKey = `${regionId}|${key}`;
+  const cached = storeCache.get(cacheKey);
   const now = Date.now();
   if (cached && cached.expiresAt > now) return cached.stores;
 
-  const url = `${PICKUP_URL}?location=${encodeURIComponent(key)}&parts.0=${encodeURIComponent(DISCOVERY_PART)}`;
+  const url = `${region.pickup_url}?location=${encodeURIComponent(key)}&parts.0=${encodeURIComponent(DISCOVERY_PART[regionId])}`;
   const response = await fetchImpl(url, {
     headers: {
       'User-Agent': USER_AGENT,
       'Accept': 'application/json,text/plain,*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
-      'Referer': 'https://www.apple.com.cn/shop/buy-iphone',
+      'Accept-Language': region.locale,
+      'Referer': region.family_base,
     },
   });
   if (!response.ok) {
-    throw new Error(`failed to fetch stores: HTTP ${response.status}`);
+    throw new Error(`failed to fetch ${regionId} stores: HTTP ${response.status}`);
   }
   const data = await response.json();
-  const stores = parseStores(data);
-  for (const store of stores) storesByNumber.set(store.store_number, store);
-  storeCache.set(key, { stores, expiresAt: now + STORE_TTL_MS });
+  const stores = parseStores(data, regionId);
+  for (const store of stores) storesByNumber.set(`${regionId}|${store.store_number}`, store);
+  storeCache.set(cacheKey, { stores, expiresAt: now + STORE_TTL_MS });
   return stores;
 }
 
-export function getKnownStore(storeNumber) {
-  return storesByNumber.get(storeNumber) || null;
+export function getKnownStore(regionId, storeNumber) {
+  return storesByNumber.get(`${regionId}|${storeNumber}`) || null;
 }
 
-export async function fetchPickupObservations(config, fetchImpl = fetch) {
+export async function fetchPickupObservations(regionId, config, fetchImpl = fetch) {
+  const region = getRegion(regionId);
+  if (!region) throw new Error(`unknown region ${regionId}`);
   if (!config || !config.parts || !config.parts.length) return [];
   if (!config.storeNumbers || !config.storeNumbers.length) return [];
 
-  const location = String(config.location || '').trim() || '518000';
+  const location = String(config.location || '').trim() || region.default_location;
   const params = new URLSearchParams();
   params.set('location', location);
   config.parts.forEach((part, index) => params.set(`parts.${index}`, part));
 
-  const response = await fetchImpl(`${PICKUP_URL}?${params.toString()}`, {
+  const response = await fetchImpl(`${region.pickup_url}?${params.toString()}`, {
     headers: {
       'User-Agent': USER_AGENT,
       'Accept': 'application/json,text/plain,*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
-      'Referer': 'https://www.apple.com.cn/shop/buy-iphone',
+      'Accept-Language': region.locale,
+      'Referer': region.family_base,
     },
   });
   if (!response.ok) {
-    throw new Error(`pickup-message HTTP ${response.status}`);
+    throw new Error(`pickup-message ${regionId} HTTP ${response.status}`);
   }
   const data = await response.json();
-  return parseObservations(data, config);
+  return parseObservations(data, config, regionId);
 }
 
-export async function searchProducts(query, fetchImpl = fetch) {
-  const term = String(query || '').trim();
-  if (!term) return await fetchAllFamilyProducts(fetchImpl);
+export async function fetchSimilarAvailability(regionId, config, fetchImpl = fetch) {
+  const region = getRegion(regionId);
+  if (!region) throw new Error(`unknown region ${regionId}`);
+  if (!config || !config.parts || !config.parts.length) return [];
+  if (!config.storeNumbers || !config.storeNumbers.length) return [];
+  const productMap = new Map((config.products || []).map((p) => [p.part_number, p]));
 
-  const url = `${SEARCH_URL}?find=${encodeURIComponent(term)}&sel=explore&src=aos&tab=explore`;
+  const results = [];
+  for (const part of config.parts) {
+    for (const storeNumber of config.storeNumbers) {
+      const url = new URL(region.recommendations_url);
+      url.searchParams.set('fae', 'true');
+      url.searchParams.set('searchNearby', 'true');
+      url.searchParams.set('mts.0', 'regular');
+      url.searchParams.set('mts.1', 'compact');
+      url.searchParams.set('store', storeNumber);
+      url.searchParams.set('product', part);
+      try {
+        const response = await fetchImpl(url.toString(), {
+          headers: {
+            'User-Agent': USER_AGENT,
+            'Accept': 'application/json,text/plain,*/*',
+            'Accept-Language': region.locale,
+            'Referer': region.family_base,
+          },
+        });
+        if (!response.ok) {
+          results.push({
+            region: regionId,
+            part_number: part,
+            store_number: storeNumber,
+            error: `HTTP ${response.status}`,
+            similar: [],
+          });
+          continue;
+        }
+        const data = await response.json();
+        results.push(parseSimilarAvailability(data, part, storeNumber, productMap, regionId));
+      } catch (err) {
+        results.push({
+          region: regionId,
+          part_number: part,
+          store_number: storeNumber,
+          error: String(err.message || err),
+          similar: [],
+        });
+      }
+    }
+  }
+  return results;
+}
+
+export async function searchProducts(regionId, query, fetchImpl = fetch) {
+  const region = getRegion(regionId);
+  if (!region) throw new Error(`unknown region ${regionId}`);
+  const term = String(query || '').trim();
+  if (!term) return await fetchAllFamilyProducts(regionId, fetchImpl);
+
+  const url = `${region.search_url}?find=${encodeURIComponent(term)}&sel=explore&src=aos&tab=explore`;
   const response = await fetchImpl(url, {
     headers: {
       'User-Agent': USER_AGENT,
       'Accept': 'application/json,text/plain,*/*',
-      'Accept-Language': 'zh-CN,zh;q=0.9',
+      'Accept-Language': region.locale,
       'X-Requested-With': 'XMLHttpRequest',
-      'Referer': 'https://www.apple.com.cn/shop/search',
+      'Referer': `${region.family_base}/search`,
     },
   });
-  if (!response.ok) throw new Error(`search HTTP ${response.status}`);
+  if (!response.ok) throw new Error(`search ${regionId} HTTP ${response.status}`);
   const data = await response.json();
-  const slugs = extractFamilySlugs(data);
+  const slugs = extractFamilySlugs(data, region);
   const products = [];
   for (const slug of slugs) {
     try {
-      const items = await fetchFamilyProducts(slug, fetchImpl);
+      const items = await fetchFamilyProducts(regionId, slug, fetchImpl);
       for (const item of items) products.push(item);
     } catch (err) {
-      console.warn('skip search family', slug, err.message || err);
+      console.warn(`skip search ${regionId}/${slug}`, err.message || err);
     }
   }
   return products;
 }
 
-export async function searchStores(query, fetchImpl = fetch) {
-  const term = String(query || '').trim();
-  if (!term) return [];
-  // Apple does not expose a public store-directory search; we use pickup-message
-  // with the user-typed location to return the nearest stores.  Empty locations
-  // simply reuse the cache.
-  try {
-    return await fetchAppleStores(term, fetchImpl);
-  } catch (err) {
-    console.warn('store search failed', err.message || err);
-    return [];
-  }
-}
-
 // --- Parsing helpers ---------------------------------------------------
 
-function parseFamilyProducts(html, slug) {
-  // Apple buy-iphone family pages embed every SKU as
-  //   <a href=".../buy-iphone/<family>/<PART>/a"
-  //      data-slot-name="productSelection" ...>
-  //     <span class="dimensionCapacity">512<small>GB</small>...</span>
-  //     <span class="dimensionColor">黑色</span>
-  //     <span class="current_price">RMB ...</span>
-  //   </a>
-  // Part numbers are normally uppercase in the URL but we also accept
-  // lowercase to be defensive against Apple changing the casing.
-  const regex = /<a\s+href="https:\/\/www\.apple\.com\.cn\/shop\/buy-iphone\/[^"]+\/([a-z0-9]{6,12}ch\/a)"[^>]*data-slot-name="productSelection"[^>]*>([\s\S]*?)<\/a>/gi;
+function parseFamilyProducts(html, region, slug) {
+  const suffix = region.part_suffix.toLowerCase();
+  const regex = new RegExp(
+    `<a\\s+href="https?:\\/\\/(?:www\\.)?apple\\.com(?:\\.cn)?\\/(?:hk-zh\\/)?shop\\/buy-iphone\\/[^"]+\\/([a-z0-9]{6,12}${suffix.replace('/', '\\/')})"[^>]*data-slot-name="productSelection"[^>]*>([\\s\\S]*?)<\\/a>`,
+    'gi',
+  );
   const products = [];
   const seen = new Set();
   let match;
@@ -214,12 +305,13 @@ function parseFamilyProducts(html, slug) {
     seen.add(partNumber);
     products.push({
       part_number: partNumber,
+      region: region.id,
       family: slug,
-      model: FAMILY_LABELS[slug] || slug,
+      model: region.family_labels[slug] || slug,
       capacity,
       color,
       price,
-      purchase_url: `https://www.apple.com.cn/shop/buy-iphone/${slug}/${partNumber.toLowerCase()}/a`,
+      purchase_url: `${region.purchase_base}/${slug}/${partNumber.toLowerCase()}/a`,
     });
   }
   return products;
@@ -245,13 +337,14 @@ function cleanText(raw) {
   return String(raw || '').replace(/<[^>]+>/g, '').replace(/&nbsp;/g, '').trim();
 }
 
-function parseStores(data) {
+function parseStores(data, regionId) {
   const list = data?.body?.stores;
   if (!Array.isArray(list)) return [];
   const stores = [];
   for (const store of list) {
     if (!store || !store.storeNumber) continue;
     stores.push({
+      region: regionId,
       store_number: store.storeNumber,
       store_name: store.storeName || store.storeNumber,
       city: store.city || '',
@@ -262,13 +355,14 @@ function parseStores(data) {
   return stores;
 }
 
-function parseObservations(data, config) {
+function parseObservations(data, config, regionId) {
   const list = data?.body?.stores;
   if (!Array.isArray(list)) return [];
   const stores = new Map();
   for (const store of list) {
     if (!store || !store.storeNumber) continue;
     stores.set(store.storeNumber, {
+      region: regionId,
       store_number: store.storeNumber,
       store_name: store.storeName || store.storeNumber,
       city: store.city || '',
@@ -277,7 +371,7 @@ function parseObservations(data, config) {
     });
   }
   const configuredStores = new Map(
-    config.storeNumbers.map((sn) => [sn, stores.get(sn) || storesByNumber.get(sn) || { store_number: sn, store_name: sn }]),
+    config.storeNumbers.map((sn) => [sn, stores.get(sn) || getKnownStore(regionId, sn) || { region: regionId, store_number: sn, store_name: sn }]),
   );
   const configuredProducts = new Map(
     config.products.map((p) => [p.part_number, p]),
@@ -292,6 +386,7 @@ function parseObservations(data, config) {
       if (!item) continue;
       const product = configuredProducts.get(part) || {};
       observations.push({
+        region: regionId,
         part_number: part,
         store_number: store.storeNumber,
         store_name: store.storeName,
@@ -306,14 +401,13 @@ function parseObservations(data, config) {
       });
     }
   }
-  // Also emit "unavailable" observations for configured products that Apple
-  // did not return at all, so the dashboard can show a complete grid.
   if (observations.length === 0) {
     for (const part of config.parts) {
       const product = configuredProducts.get(part) || {};
       for (const sn of config.storeNumbers) {
         const store = configuredStores.get(sn);
         observations.push({
+          region: regionId,
           part_number: part,
           store_number: sn,
           store_name: store?.store_name || sn,
@@ -332,7 +426,60 @@ function parseObservations(data, config) {
   return observations;
 }
 
-function extractFamilySlugs(data) {
+function parseSimilarAvailability(data, part, storeNumber, productMap, regionId) {
+  const block = data?.body?.PickupMessage;
+  const noSimilar = data?.body?.noSimilarModelsText;
+  const stores = Array.isArray(block?.stores) ? block.stores : [];
+  const similar = [];
+  for (const store of stores) {
+    const availability = store.partsAvailability || {};
+    for (const [similarPart, item] of Object.entries(availability)) {
+      if (!item || item.pickupDisplay !== 'available') continue;
+      const regular = item.messageTypes?.regular || {};
+      const title = regular.storePickupProductTitle || '';
+      const quote = regular.storePickupQuote || item.pickupSearchQuote || '';
+      const modelMeta = productMap.get(similarPart) || {};
+      similar.push({
+        region: regionId,
+        part_number: similarPart,
+        title,
+        pickup_quote: quote,
+        pickup_display: item.pickupDisplay,
+        model: modelMeta.model || extractModelFromTitle(title),
+        capacity: modelMeta.capacity || extractCapacityFromTitle(title),
+        color: modelMeta.color || extractColorFromTitle(title),
+      });
+    }
+  }
+  return {
+    region: regionId,
+    part_number: part,
+    store_number: storeNumber,
+    no_similar_text: noSimilar || '',
+    similar,
+  };
+}
+
+function extractModelFromTitle(title) {
+  const m = String(title || '').match(/iPhone[^\d]*?(?=\s*\d+(?:\.\d+)?\s*(?:TB|GB)\b|$)/i);
+  return m ? m[0].replace(/\u00a0/g, ' ').trim() : '';
+}
+
+function extractCapacityFromTitle(title) {
+  const m = String(title || '').match(/(\d+(?:\.\d+)?)\s*(TB|GB)/i);
+  return m ? `${m[1]}${m[2].toUpperCase()}` : '';
+}
+
+function extractColorFromTitle(title) {
+  const stripped = String(title || '')
+    .replace(/^iPhone[^\d]*?(?=\s*\d)/i, '')
+    .replace(/\d+(?:\.\d+)?\s*(?:TB|GB)/i, '')
+    .replace(/\u00a0/g, ' ')
+    .trim();
+  return stripped;
+}
+
+function extractFamilySlugs(data, region) {
   const body = data?.body;
   if (!body) return [];
   const slugs = new Set();
@@ -340,18 +487,20 @@ function extractFamilySlugs(data) {
   const haystack = JSON.stringify(body);
   let m;
   while ((m = regex.exec(haystack)) !== null) {
-    if (FAMILY_SLUGS.includes(m[1])) slugs.add(m[1]);
+    if (region.family_slugs.includes(m[1])) slugs.add(m[1]);
   }
   return [...slugs];
 }
+
+const USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 ' +
+  '(KHTML, like Gecko) Version/17.5 Safari/605.1.15';
 
 async function decodeHtml(buffer) {
   try {
     const text = new TextDecoder('utf-8', { fatal: false }).decode(buffer);
     if (text.includes('<a')) return text;
-  } catch (err) {
-    /* fall through to gzip */
-  }
+  } catch (err) { /* fall through to gzip */ }
   try {
     const stream = new DecompressionStream('gzip');
     const decompressed = stream.pipeThrough(new TextDecoderStream('utf-8'));
@@ -367,7 +516,6 @@ async function decodeHtml(buffer) {
     }
     return text;
   } catch (err) {
-    // DecompressionStream unavailable; return utf-8 attempt as best effort.
     return new TextDecoder('utf-8', { fatal: false }).decode(buffer);
   }
 }

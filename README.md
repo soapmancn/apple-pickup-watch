@@ -69,11 +69,13 @@ Published apple-pickup-watch (X.XX sec)
 | `/` | 仪表盘（每个用户看到的都相同） |
 | `/api/state` | JSON 当前状态 |
 | `/api/log` | JSON 最近 100 条 tick 日志（newest-first） |
-| `/api/settings` | `GET` 读取网页配置 + catalogue；`POST` 保存并立即重排 Alarm |
-| `/api/catalog` | `GET` 读取缓存的 catalogue；`POST` 强制刷新（`{"products":true,"stores":true,"location":"510000"}`） |
-| `/api/search/products?q=iPhone+17` | 搜索在售 SKU 列表（family 详情） |
-| `/api/search/stores?q=510000` | 查询邮编/城市附近 Apple Store |
-| `/api/stream` | SSE 实时事件流（推送`new-available`、`state`） |
+| `/api/settings` | `GET` 读取网页配置 + 所有 region 的 catalogue；`POST` 保存并立即重排 Alarm |
+| `/api/regions` | JSON 支持的 region 列表（当前 `cn` 大陆 / `hk` 香港） |
+| `/api/catalog` | `GET` 读取按 region 缓存的 catalogue；`POST` 强制刷新（`{"region":"hk","products":true,"stores":true,"locations":{"hk":"中環"}}`） |
+| `/api/search/products?region=hk&q=iPhone+18+Pro` | 搜索指定 region 的在售 SKU 列表 |
+| `/api/search/stores?region=hk&q=中環` | 查询邮编/城市附近 Apple Store（按 region 切换） |
+| `/api/similar` | JSON 最近一次相似机型扫描结果（含关键字匹配） |
+| `/api/stream` | SSE 实时事件流（推送 `new-available`、`keyword-available`、`state`） |
 | `/healthz` | 健康检查端点（永远返回 200） |
 
 ### 测试通知（不真的等苹果补货）
@@ -108,8 +110,43 @@ curl -X POST https://apple-pickup-watch.YOUR-SUBDOMAIN.workers.dev/api/test-stoc
 
 ### 怎么知道 part_number 和 store_number？
 
-- **part_number**（每个 SKU 唯一）：打开 `https://www.apple.com.cn/shop/buy-iphone/iphone-17`，URL 里 `iphone-17/mg6w4ch/a` 的 `mg6w4ch/a` 就是 part（统一大写为 `MG6W4CH/A`）；或直接调用 `GET /api/search/products?q=iPhone%2017` 让 Worker 返回该 family 全部 SKU。
-- **store_number**（每家店唯一）：打开 `https://www.apple.com.cn/retail/...`，URL 里通常包含 `R761` / `R448` 等；或直接调用 `GET /api/search/stores?q=510000` 让 Worker 返回该邮编附近全部门店。
+- **part_number**（每个 SKU 唯一）：
+  - 大陆：`https://www.apple.com.cn/shop/buy-iphone/iphone-17`，URL 里 `iphone-17/mg6w4ch/a` 的 `mg6w4ch/a` 就是 part（统一大写为 `MG6W4CH/A`）
+  - 香港：`https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro`，URL 里 `iphone-18-pro/mjxw4za/a` → `MJXW4ZA/A`
+  - 或直接调用 `GET /api/search/products?region=hk&q=iPhone%2018%20Pro` 让 Worker 返回该 region + family 全部 SKU。
+- **store_number**（每家店唯一）：
+  - 大陆：URL 形如 `https://www.apple.com.cn/retail/<store_name>`，store_number 通常为 `R761` / `R448` 等；调用 `GET /api/search/stores?region=cn&q=510000` 即可
+  - 香港：URL 形如 `https://www.apple.com/hk/retail/ifcmall/`，对应 store_number `R428`；调用 `GET /api/search/stores?region=hk&q=中環`
+
+### 中国大陆 + 香港双 region
+
+设置结构是按 region 分组的：
+
+```json
+{
+  "interval_seconds": 120,
+  "regions": {
+    "cn": {
+      "enabled": true,
+      "location": "518000",
+      "store_numbers": ["R761", "R484", "R793"],
+      "part_numbers": ["MJY84CH/A", "MJYD4CH/A"],
+      "keyword_alert": "Pro Max,1TB"
+    },
+    "hk": {
+      "enabled": true,
+      "location": "中環",
+      "store_numbers": ["R428"],
+      "part_numbers": ["MJXW4ZA/A"],
+      "keyword_alert": ""
+    }
+  }
+}
+```
+
+- **香港 SKU 后缀是 `ZA/A`**（不是 `CH/A`）；通过 `?region=hk` 查询 catalogue
+- 关键字用 `,` / `;` / `，` / `；` 分隔多个 keyword；每个 keyword 内部允许空格（如 `Pro Max`）
+- `keyword_alert` 为空时仅在你勾选的精确 part_number 上架时提醒；非空时只要相似机型标题包含任意关键字也提醒
 
 ## 架构
 

@@ -22,6 +22,9 @@ export default {
     if (url.pathname === '/api/log') {
       return room.fetch(new Request('https://room/log', { method: 'GET' }));
     }
+    if (url.pathname === '/api/similar') {
+      return room.fetch(new Request('https://room/similar', { method: 'GET' }));
+    }
     if (url.pathname === '/api/catalog') {
       return room.fetch(new Request('https://room/catalog', {
         method: request.method,
@@ -34,6 +37,12 @@ export default {
     }
     if (url.pathname === '/api/search/stores' && request.method === 'GET') {
       return room.fetch(new Request('https://room/search/stores' + (url.search || ''), { method: 'GET' }));
+    }
+    if (url.pathname === '/api/regions') {
+      return Response.json({ regions: [
+        { id: 'cn', label: '中国大陆', default_location: '518000', part_suffix: 'CH/A', purchase_base: 'https://www.apple.com.cn/shop/buy-iphone' },
+        { id: 'hk', label: '香港', default_location: '中環', part_suffix: 'ZA/A', purchase_base: 'https://www.apple.com/hk-zh/shop/buy-iphone' },
+      ] });
     }
     if (url.pathname === '/api/settings') {
       if (request.method === 'GET') {

@@ -5,7 +5,14 @@
  *   - active SSE subscribers for live browser notifications
  */
 
-import { fetchPickupObservations, fetchAllFamilyProducts, fetchAppleStores } from './apple.js';
+import {
+  fetchPickupObservations,
+  fetchAllFamilyProducts,
+  fetchAppleStores,
+  fetchSimilarAvailability,
+  listRegions,
+  getRegion,
+} from './apple.js';
 import {
   buildMonitorConfig,
   defaultMonitorSettings,
@@ -39,13 +46,14 @@ export class Room {
     this.settings = config.settings;
     this.monitorConfig = config;
     this.subscribers = new Set();
-    this.catalogue = { products: [], stores: [], productsAt: 0, storesAt: 0 };
+    this.catalogue = { byRegion: {}, products: [], stores: [], productsAt: 0, storesAt: 0 };
 
     state.blockConcurrencyWhile(async () => {
       const saved = await state.storage.get(STORAGE_KEY);
       if (!saved) return;
       this.log = saved.log || [];
       this.previousAvailable = saved.previousAvailable || [];
+      this.previousSimilarKeys = saved.previousSimilarKeys || [];
       this.lastCheckedAt = saved.lastCheckedAt || null;
       this.lastAttemptAt = saved.lastAttemptAt || null;
       this.status = saved.status || 'starting';
@@ -53,6 +61,9 @@ export class Room {
       this.failCount = saved.failCount || 0;
       this.lastError = saved.lastError || null;
       this.pollState = saved.pollState || 'healthy';
+      this.lastSimilarAvailability = saved.lastSimilarAvailability || null;
+      this.previousSimilarKeys = saved.previousSimilarKeys || [];
+      this.regionConfigs = saved.regionConfigs || this.monitorConfig.regions || [];
       if (saved.settings) {
         try {
           this.applyConfig(buildMonitorConfig(saved.settings));
@@ -61,13 +72,27 @@ export class Room {
         }
       }
       const catalog = await state.storage.get(CATALOG_KEY);
-      if (catalog) {
-        this.catalogue = {
-          products: catalog.products || [],
-          stores: catalog.stores || [],
-          productsAt: catalog.productsAt || 0,
-          storesAt: catalog.storesAt || 0,
-        };
+      if (catalog && typeof catalog === 'object') {
+        if (catalog.byRegion) {
+          this.catalogue = catalog;
+        } else {
+          // Migrate from the single-region v1 cache.
+          this.catalogue = {
+            byRegion: {
+              cn: {
+                products: catalog.products || [],
+                stores: catalog.stores || [],
+                productsAt: catalog.productsAt || 0,
+                storesAt: catalog.storesAt || 0,
+              },
+              hk: { products: [], stores: [], productsAt: 0, storesAt: 0 },
+            },
+            products: catalog.products || [],
+            stores: catalog.stores || [],
+            productsAt: catalog.productsAt || 0,
+            storesAt: catalog.storesAt || 0,
+          };
+        }
       }
     });
   }
@@ -76,6 +101,7 @@ export class Room {
     const url = new URL(request.url);
     if (url.pathname === '/state') return this.handleState();
     if (url.pathname === '/log')   return this.handleLog();
+    if (url.pathname === '/similar') return this.handleSimilar();
     if (url.pathname === '/catalog') {
       if (request.method === 'POST') return this.handleCatalogRefresh(await request.json().catch(() => ({})));
       return this.handleCatalogGet();
@@ -105,8 +131,9 @@ export class Room {
   async alarm() {
     const config = this.monitorConfig;
     let nextDelaySeconds = config.intervalSeconds;
+    let result = { observations: [], similar: [] };
     try {
-      await this.runInventoryCheck(config);
+      result = await this.runInventoryCheck(config);
     } catch (err) {
       const failCount = this.failCount + 1;
       nextDelaySeconds = Math.min(
@@ -119,9 +146,22 @@ export class Room {
         fail_count: failCount,
         ok_count: 0,
         poll_seconds: config.intervalSeconds,
+        regions: config.regions,
         error: `${String((err && err.message) || err).slice(0, 240)}；${nextDelaySeconds} 秒后重试`,
       });
     } finally {
+      // If every enabled region failed, treat the alarm as a backoff too.
+      const enabledRegions = (config.regions || []).filter((r) => r.enabled);
+      const anySuccess = (result.observations || []).length > 0;
+      if (enabledRegions.length && !anySuccess) {
+        const failCount = Math.max(1, this.failCount || 1);
+        nextDelaySeconds = Math.min(
+          900,
+          Math.max(config.intervalSeconds, 30 * (2 ** Math.min(failCount - 1, 5))),
+        );
+        if (this.pollState !== 'backoff') this.pollState = 'backoff';
+        this.appendLog('skip', `所有 ${enabledRegions.length} 个 region 本轮均失败或无数据，${nextDelaySeconds} 秒后重试`);
+      }
       await this.scheduleNextAlarm(nextDelaySeconds, this.monitorConfig.intervalSeconds);
     }
   }
@@ -148,97 +188,144 @@ export class Room {
   handleSettingsGet() {
     return Response.json({
       settings: this.settings,
-      catalog: {
-        products: this.catalogue.products,
-        stores: this.catalogue.stores,
-        products_at: this.catalogue.productsAt,
-        stores_at: this.catalogue.storesAt,
-      },
+      regions: listRegions().map((region) => {
+        const r = this.catalogue.byRegion[region.id] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+        return {
+          id: region.id,
+          label: region.label,
+          part_suffix: region.part_suffix,
+          purchase_base: region.purchase_base,
+          products: r.products,
+          stores: r.stores,
+          products_at: r.productsAt,
+          stores_at: r.storesAt,
+        };
+      }),
+      catalog: this.publicCatalog(),
     });
   }
 
   handleCatalogGet() {
     const now = Date.now();
-    const productsStale = now - this.catalogue.productsAt > CATALOG_TTL_MS;
-    const storesStale = now - this.catalogue.storesAt > CATALOG_TTL_MS;
-    return Response.json({
-      catalog: {
-        products: this.catalogue.products,
-        stores: this.catalogue.stores,
-        products_at: this.catalogue.productsAt,
-        stores_at: this.catalogue.storesAt,
-        products_stale: productsStale,
-        stores_stale: storesStale,
-      },
-    });
+    const byRegion = {};
+    for (const region of listRegions()) {
+      const r = this.catalogue.byRegion[region.id] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+      byRegion[region.id] = {
+        products: r.products,
+        stores: r.stores,
+        products_at: r.productsAt,
+        stores_at: r.storesAt,
+        products_stale: !r.productsAt || now - r.productsAt > CATALOG_TTL_MS,
+        stores_stale: !r.storesAt || now - r.storesAt > CATALOG_TTL_MS,
+      };
+    }
+    return Response.json({ catalog: { byRegion } });
   }
 
   async handleCatalogRefresh(body) {
     const tasks = [];
-    if (!body || body.products !== false) {
-      tasks.push(this.refreshProductCatalogue().then((n) => ({ kind: 'products', count: n })).catch((err) => ({ kind: 'products', error: String(err.message || err) })));
-    }
-    const location = String((body && body.location) || this.settings?.location || '').trim();
-    if (!body || body.stores !== false) {
-      tasks.push(this.refreshStoreCatalogue(location).then((n) => ({ kind: 'stores', count: n, location })).catch((err) => ({ kind: 'stores', error: String(err.message || err) })));
+    const regions = body && body.region ? [body.region] : listRegions().map((r) => r.id);
+    for (const regionId of regions) {
+      if (!getRegion(regionId)) continue;
+      const location = (body && body.locations && body.locations[regionId]) || this.regionLocation(regionId);
+      if (!body || body.products !== false) {
+        tasks.push(this.refreshProductCatalogue(regionId)
+          .then((n) => ({ region: regionId, kind: 'products', count: n }))
+          .catch((err) => ({ region: regionId, kind: 'products', error: String(err.message || err) })));
+      }
+      if (!body || body.stores !== false) {
+        tasks.push(this.refreshStoreCatalogue(regionId, location)
+          .then((n) => ({ region: regionId, kind: 'stores', count: n, location }))
+          .catch((err) => ({ region: regionId, kind: 'stores', error: String(err.message || err) })));
+      }
     }
     const results = await Promise.all(tasks);
-    return Response.json({ ok: true, results, catalog: {
-      products: this.catalogue.products,
-      stores: this.catalogue.stores,
-      products_at: this.catalogue.productsAt,
-      stores_at: this.catalogue.storesAt,
-    } });
+    return Response.json({ ok: true, results, catalog: this.publicCatalog() });
   }
 
   async handleProductSearch(url) {
+    const region = url.searchParams.get('region') || 'cn';
+    if (!getRegion(region)) {
+      return Response.json({ ok: false, error: `unknown region ${region}` }, { status: 400 });
+    }
     const query = url.searchParams.get('q') || '';
     try {
       if (!query) {
-        const products = await this.ensureProductCatalogue();
-        return Response.json({ ok: true, query, products });
+        const products = await this.ensureProductCatalogue(region);
+        return Response.json({ ok: true, region, query, products });
       }
       const { searchProducts } = await import('./apple.js');
-      const products = await searchProducts(query);
-      return Response.json({ ok: true, query, products });
+      const products = await searchProducts(region, query);
+      return Response.json({ ok: true, region, query, products });
     } catch (err) {
       return Response.json({ ok: false, error: String(err.message || err) }, { status: 502 });
     }
   }
 
   async handleStoreSearch(url) {
-    const query = url.searchParams.get('q') || this.settings?.location || '';
+    const region = url.searchParams.get('region') || 'cn';
+    if (!getRegion(region)) {
+      return Response.json({ ok: false, error: `unknown region ${region}` }, { status: 400 });
+    }
+    const query = url.searchParams.get('q') || this.regionLocation(region);
     try {
-      const stores = await fetchAppleStores(query);
-      this.catalogue.stores = stores;
-      this.catalogue.storesAt = Date.now();
+      const stores = await fetchAppleStores(region, query);
+      const bucket = this.catalogue.byRegion[region] = this.catalogue.byRegion[region] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+      bucket.stores = stores;
+      bucket.storesAt = Date.now();
       await this.state.storage.put(CATALOG_KEY, this.catalogue);
-      return Response.json({ ok: true, query, stores });
+      return Response.json({ ok: true, region, query, stores });
     } catch (err) {
       return Response.json({ ok: false, error: String(err.message || err) }, { status: 502 });
     }
   }
 
-  async ensureProductCatalogue() {
-    const fresh = Date.now() - this.catalogue.productsAt < CATALOG_TTL_MS;
-    if (fresh && this.catalogue.products.length) return this.catalogue.products;
-    return this.refreshProductCatalogue();
+  regionLocation(regionId) {
+    const r = this.settings?.regions?.[regionId];
+    return (r && r.location) || getRegion(regionId)?.default_location || '';
   }
 
-  async refreshProductCatalogue() {
-    const products = await fetchAllFamilyProducts();
-    this.catalogue.products = products;
+  async ensureProductCatalogue(regionId) {
+    const bucket = this.catalogue.byRegion[regionId] = this.catalogue.byRegion[regionId] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+    const fresh = Date.now() - bucket.productsAt < CATALOG_TTL_MS;
+    if (fresh && bucket.products.length) return bucket.products;
+    return this.refreshProductCatalogue(regionId);
+  }
+
+  async refreshProductCatalogue(regionId) {
+    const products = await fetchAllFamilyProducts(regionId);
+    const bucket = this.catalogue.byRegion[regionId] = this.catalogue.byRegion[regionId] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+    bucket.products = products;
+    bucket.productsAt = Date.now();
+    this.catalogue.products = listRegions().flatMap((r) => this.catalogue.byRegion[r.id]?.products || []);
     this.catalogue.productsAt = Date.now();
     await this.state.storage.put(CATALOG_KEY, this.catalogue);
     return products.length;
   }
 
-  async refreshStoreCatalogue(location) {
-    const stores = await fetchAppleStores(location || this.settings?.location);
-    this.catalogue.stores = stores;
+  async refreshStoreCatalogue(regionId, location) {
+    const stores = await fetchAppleStores(regionId, location || this.regionLocation(regionId));
+    const bucket = this.catalogue.byRegion[regionId] = this.catalogue.byRegion[regionId] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+    bucket.stores = stores;
+    bucket.storesAt = Date.now();
+    this.catalogue.stores = listRegions().flatMap((r) => this.catalogue.byRegion[r.id]?.stores || []);
     this.catalogue.storesAt = Date.now();
     await this.state.storage.put(CATALOG_KEY, this.catalogue);
     return stores.length;
+  }
+
+  publicCatalog() {
+    const byRegion = {};
+    for (const region of listRegions()) {
+      const r = this.catalogue.byRegion[region.id] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+      byRegion[region.id] = {
+        products: r.products,
+        stores: r.stores,
+        products_at: r.productsAt,
+        stores_at: r.storesAt,
+      };
+    }
+    return { byRegion };
   }
 
   async handleSettingsUpdate(input) {
@@ -251,19 +338,28 @@ export class Room {
     // Make sure catalogue info is current so the saved config carries product
     // + store labels for the dashboard summary.
     try {
-      if (!this.catalogue.products.length) await this.refreshProductCatalogue();
-      if (!this.catalogue.stores.length) await this.refreshStoreCatalogue(settings.location);
+      for (const region of listRegions()) {
+        if (!settings.regions[region.id]?.enabled) continue;
+        const bucket = this.catalogue.byRegion[region.id] = this.catalogue.byRegion[region.id] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+        if (!bucket.products.length) {
+          try { await this.refreshProductCatalogue(region.id); } catch (err) { console.warn(`refresh products ${region.id}`, err.message || err); }
+        }
+        if (!bucket.stores.length) {
+          try { await this.refreshStoreCatalogue(region.id, settings.regions[region.id].location); } catch (err) { console.warn(`refresh stores ${region.id}`, err.message || err); }
+        }
+      }
     } catch (err) {
       console.warn('catalogue refresh during save failed', err);
     }
 
     const config = buildMonitorConfig(settings);
-    const productMap = new Map(this.catalogue.products.map((p) => [p.part_number, p]));
-    const storeMap = new Map(this.catalogue.stores.map((s) => [s.store_number, s]));
-    const products = settings.part_numbers.map((pn) => productMap.get(pn)).filter(Boolean);
-    const stores = settings.store_numbers.map((sn) => storeMap.get(sn) || { store_number: sn, store_name: sn, city: '' });
-    config.products = products;
-    config.stores = stores;
+    for (const regionConfig of config.regions) {
+      const bucket = this.catalogue.byRegion[regionConfig.id] || { products: [], stores: [] };
+      const productMap = new Map(bucket.products.map((p) => [p.part_number, p]));
+      const storeMap = new Map(bucket.stores.map((s) => [s.store_number, s]));
+      regionConfig.products = regionConfig.parts.map((pn) => productMap.get(pn)).filter(Boolean);
+      regionConfig.stores = regionConfig.storeNumbers.map((sn) => storeMap.get(sn) || { region: regionConfig.id, store_number: sn, store_name: sn });
+    }
     this.applyConfig(config);
     this.status = 'starting';
     this.pollState = 'healthy';
@@ -273,7 +369,11 @@ export class Room {
     this.previousAvailable = [];
     this.appendLog(
       'ok',
-      `监控设置已更新 · 每 ${config.intervalSeconds} 秒 · ${stores.length} 家店 · ${products.length} 个型号容量`,
+      `监控设置已更新 · 每 ${config.intervalSeconds} 秒 · ` +
+      config.regions
+        .filter((r) => r.enabled)
+        .map((r) => `${r.label} ${r.parts.length}型号×${r.storeNumbers.length}店`)
+        .join(' / '),
     );
     await this.persist();
     await this.state.storage.setAlarm(Date.now() + 1_000);
@@ -287,27 +387,141 @@ export class Room {
     return Response.json({
       ok: true,
       settings: this.settings,
-      catalog: {
-        products: this.catalogue.products,
-        stores: this.catalogue.stores,
-        products_at: this.catalogue.productsAt,
-        stores_at: this.catalogue.storesAt,
-      },
+      catalog: this.publicCatalog(),
+      regions: listRegions().map((region) => {
+        const r = this.catalogue.byRegion[region.id] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+        return {
+          id: region.id, label: region.label,
+          products: r.products, stores: r.stores,
+          products_at: r.productsAt, stores_at: r.storesAt,
+        };
+      }),
     });
   }
 
   async runInventoryCheck(config) {
-    const observations = await fetchPickupObservations(config);
+    const allObservations = [];
+    const failures = [];
+    const regions = (config.regions || []).filter((region) => region.enabled);
+    for (const regionConfig of regions) {
+      if (!regionConfig.parts.length || !regionConfig.storeNumbers.length) continue;
+      try {
+        const observations = await fetchPickupObservations(regionConfig.id, regionConfig);
+        allObservations.push(...observations);
+      } catch (err) {
+        const message = String((err && err.message) || err).slice(0, 240);
+        failures.push(`${regionConfig.label}: ${message}`);
+        this.appendLog('fail', `${regionConfig.label} 库存查询失败 · ${message}`);
+      }
+    }
     await this.handleTick({
       checked_at: nowCst(),
-      observations,
-      fail_count: 0,
-      ok_count: observations.length,
+      observations: allObservations,
+      fail_count: failures.length,
+      ok_count: allObservations.length,
       poll_seconds: config.intervalSeconds,
-      stores: config.stores,
-      products: config.products,
-      source_url: config.sourceUrl,
+      regions: config.regions,
+      source_url: config.regions?.[0]?.sourceUrl || '',
     });
+
+    // Probe the recommendations endpoint for every saved part × store per
+    // region and log every similar in-stock variant plus surface keyword
+    // alerts.
+    let allSimilar = [];
+    let keywordHits = [];
+    for (const regionConfig of regions) {
+      if (!regionConfig.parts.length || !regionConfig.storeNumbers.length) continue;
+      try {
+        const similar = await fetchSimilarAvailability(regionConfig.id, regionConfig);
+        allSimilar.push(...similar);
+      } catch (err) {
+        this.appendLog('fail', `${regionConfig.label} 相似机型查询失败 · ${String(err.message || err).slice(0, 200)}`);
+      }
+    }
+    if (allSimilar.length) {
+      keywordHits = this.recordSimilarAvailability(allSimilar);
+    }
+    return { observations: allObservations, similar: allSimilar, keywordHits };
+  }
+
+  recordSimilarAvailability(similar) {
+    const regionKeywords = {};
+    for (const region of this.regionConfigs || []) {
+      const tokens = Array.isArray(region.keywordTokens) && region.keywordTokens.length
+        ? region.keywordTokens
+        : String(region.keywordAlert || '').split('|').map((s) => s.trim()).filter(Boolean);
+      regionKeywords[region.id] = tokens;
+    }
+
+    let totalAvailable = 0;
+    let totalProbed = 0;
+    let errored = 0;
+    const keywordHits = [];
+    const previousKeys = new Set(this.previousSimilarKeys || []);
+    const currentKeys = new Set();
+    const newHitKeys = new Set();
+
+    for (const probe of similar) {
+      totalProbed += 1;
+      if (probe.error) { errored += 1; continue; }
+      if (!probe.similar || !probe.similar.length) continue;
+      const region = this.regionConfigs?.find((r) => r.id === probe.region);
+      const regionLabel = region?.label || probe.region;
+      const storeByNumber = new Map((region?.stores || []).map((s) => [s.store_number, s]));
+      const productByPart = new Map((region?.products || []).map((p) => [p.part_number, p]));
+      const sourceStore = storeByNumber.get(probe.store_number);
+      const storeName = sourceStore?.store_name || probe.store_number;
+      const tokens = regionKeywords[probe.region] || [];
+
+      for (const item of probe.similar) {
+        totalAvailable += 1;
+        const key = `${item.part_number}|${probe.store_number}`;
+        currentKeys.add(key);
+        const title = item.title || `${item.model || ''} ${item.capacity || ''} ${item.color || ''}`.trim() || item.part_number;
+        const summary = `[${regionLabel}] ${title} @ ${storeName}`;
+        this.appendLog('ok', `相似机型有货 · ${summary} · ${item.pickup_quote || ''}`.slice(0, 240));
+        const matched = pickKeyword(tokens, title);
+        if (matched) {
+          keywordHits.push({
+            region: probe.region,
+            key,
+            title,
+            store_name: storeName,
+            store_number: probe.store_number,
+            part_number: item.part_number,
+            pickup_quote: item.pickup_quote,
+            keyword: matched,
+          });
+          if (!previousKeys.has(key)) newHitKeys.add(key);
+        }
+      }
+    }
+
+    this.previousSimilarKeys = [...currentKeys];
+
+    this.appendLog(
+      'skip',
+      `相似机型扫描 · 探测 ${totalProbed} 个组合 · 有货 ${totalAvailable} 条 · 失败 ${errored} · 关键字匹配 ${keywordHits.length}`,
+    );
+
+    this.lastSimilarAvailability = {
+      ts: nowCst(),
+      total_probed: totalProbed,
+      total_available: totalAvailable,
+      errored,
+      similar: similar.slice(0, 80),
+      keyword_hits: keywordHits,
+    };
+
+    if (newHitKeys.size > 0) {
+      const broadcast = {
+        type: 'keyword-available',
+        hits: keywordHits.filter((h) => newHitKeys.has(h.key)),
+        ts: nowCst(),
+      };
+      for (const c of this.subscribers) this.safeEnqueue(c, 'keyword-available', broadcast);
+    }
+    return keywordHits;
   }
 
   async scheduleNextAlarm(delaySeconds, configuredIntervalSeconds = delaySeconds) {
@@ -322,9 +536,8 @@ export class Room {
     this.monitorConfig = config;
     this.settings = config.settings;
     this.pollSeconds = config.intervalSeconds;
-    this.stores = config.stores;
-    this.variants = config.products;
-    this.sourceUrl = config.sourceUrl;
+    this.sourceUrl = config.regions?.[0]?.sourceUrl || '';
+    this.regionConfigs = config.regions || [];
   }
 
   handleState() {
@@ -335,16 +548,13 @@ export class Room {
       available: this.currentAvailable(),
       new_available: [],
       observations: this.observations,
-      stores: this.stores,
-      variants: this.variants,
+      stores: this.flattenStores(),
+      variants: this.flattenVariants(),
+      regions: this.regionConfigs || [],
       source_url: this.sourceUrl,
       settings: this.settings,
-      catalog: {
-        products: this.catalogue.products,
-        stores: this.catalogue.stores,
-        products_at: this.catalogue.productsAt,
-        stores_at: this.catalogue.storesAt,
-      },
+      last_similar: this.lastSimilarAvailability || null,
+      catalog: this.publicCatalog(),
       error: this.status === 'query_failed' ? this.lastError : null,
       poll_seconds: this.pollSeconds,
       poll_state: this.pollState,
@@ -367,6 +577,10 @@ export class Room {
         'Access-Control-Allow-Origin': '*',
       },
     });
+  }
+
+  handleSimilar() {
+    return Response.json(this.lastSimilarAvailability || { similar: [], keyword_hits: [] });
   }
 
   /**
@@ -412,9 +626,10 @@ export class Room {
     if (Number.isFinite(payload.poll_seconds) && payload.poll_seconds >= 10) {
       this.pollSeconds = payload.poll_seconds;
     }
-    if (Array.isArray(payload.stores) && payload.stores.length) this.stores = payload.stores;
-    if (Array.isArray(payload.products) && payload.products.length) this.variants = payload.products;
     if (payload.source_url) this.sourceUrl = payload.source_url;
+    if (Array.isArray(payload.regions) && payload.regions.length) {
+      this.regionConfigs = payload.regions;
+    }
 
     if (payload.error || this.failCount > 0) {
       this.status = 'query_failed';
@@ -438,8 +653,8 @@ export class Room {
     const newlyAvailable = [...currentSet].filter((k) => !previousSet.has(k));
     this.previousAvailable = [...currentSet];
 
-    const newDetail = formatKeys(newlyAvailable, this.observations, this.variants);
-    const availDetail = formatKeys([...currentSet], this.observations, this.variants);
+    const newDetail = formatKeys(newlyAvailable, this.observations, this.flattenVariants());
+    const availDetail = formatKeys([...currentSet], this.observations, this.flattenVariants());
     const msg =
       `tick 成功 · 在售 ${currentSet.size} 个组合` +
       (availDetail ? `（${availDetail}）` : '') +
@@ -449,7 +664,6 @@ export class Room {
     this.appendLog('ok', msg);
     await this.persist();
 
-    // Broadcast to all open browsers.
     if (newlyAvailable.length > 0) {
       const broadcast = {
         type: 'new-available',
@@ -457,10 +671,12 @@ export class Room {
         details: newlyAvailable.map((k) => {
           const [part, store] = k.split('|');
           const obs = this.observations.find((o) => o.part_number === part && o.store_number === store);
-          const v = this.variants.find((vv) => vv.part_number === part) || {};
+          const variants = this.flattenVariants();
+          const v = variants.find((vv) => vv.part_number === part) || {};
           return {
             key: k,
             part_number: part,
+            region: obs?.region || '',
             capacity: v.capacity || '',
             color: v.color || '',
             store_name: obs?.store_name || store,
@@ -471,8 +687,6 @@ export class Room {
       };
       for (const c of this.subscribers) this.safeEnqueue(c, 'new-available', broadcast);
     }
-    // Also broadcast an updated-state heartbeat so any tab can refresh
-    // its in-page view without polling /api/state.
     for (const c of this.subscribers) {
       this.safeEnqueue(c, 'state', { checked_at: this.lastCheckedAt });
     }
@@ -482,8 +696,12 @@ export class Room {
 
   async handleTestStock(body) {
     // Forge: pretend some part+store just became available.
-    const part = (body && body.part_number) || this.variants[0]?.part_number || '';
-    const store = (body && body.store_number) || this.stores[0]?.store_number || '';
+    const region = body && body.region || 'cn';
+    const part = (body && body.part_number) || this.regionConfigs?.find((r) => r.id === region)?.parts?.[0] || '';
+    const store = (body && body.store_number) || this.regionConfigs?.find((r) => r.id === region)?.storeNumbers?.[0] || '';
+    if (!part || !store) {
+      return new Response('no part/store available for testing', { status: 400 });
+    }
     const fake = {
       checked_at: nowCst(),
       observations: this.observations.map((o) => {
@@ -494,7 +712,6 @@ export class Room {
       }),
       fail_count: 0,
     };
-    // Force a diff: clear previous_available first.
     this.previousAvailable = this.previousAvailable.filter((k) => k !== `${part}|${store}`);
     return this.handleTick(fake);
   }
@@ -505,10 +722,27 @@ export class Room {
       .map((o) => `${o.part_number}|${o.store_number}`);
   }
 
+  flattenStores() {
+    const out = [];
+    for (const region of this.regionConfigs || []) {
+      for (const store of region.stores || []) out.push(store);
+    }
+    return out;
+  }
+
+  flattenVariants() {
+    const out = [];
+    for (const region of this.regionConfigs || []) {
+      for (const product of region.products || []) out.push(product);
+    }
+    return out;
+  }
+
   async persist() {
     await this.state.storage.put(STORAGE_KEY, {
       log: this.log,
       previousAvailable: this.previousAvailable,
+      previousSimilarKeys: this.previousSimilarKeys || [],
       lastCheckedAt: this.lastCheckedAt,
       lastAttemptAt: this.lastAttemptAt,
       status: this.status,
@@ -518,6 +752,8 @@ export class Room {
       pollSeconds: this.pollSeconds,
       pollState: this.pollState,
       settings: this.settings,
+      lastSimilarAvailability: this.lastSimilarAvailability || null,
+      regionConfigs: this.regionConfigs || [],
     });
   }
 
@@ -537,6 +773,16 @@ function formatKeys(keys, observations, variants) {
     const o = oBy.get(k) || {};
     return `${part}（${v.color || ''}${v.capacity || ''}）@ ${o.store_name || store}（${store}）`;
   }).join(' · ');
+}
+
+function pickKeyword(tokens, title) {
+  if (!Array.isArray(tokens) || !tokens.length) return '';
+  let best = '';
+  for (const token of tokens) {
+    if (!token) continue;
+    if (title.includes(token) && token.length > best.length) best = token;
+  }
+  return best;
 }
 
 function nowCst() {

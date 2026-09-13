@@ -92,6 +92,27 @@
     .toast.show { transform: translateY(0); opacity: 1; }
     .toast .title { font-weight: 600; margin-bottom: 4px; color: var(--accent); }
     .toast .body  { font-size: 13px; }
+    .similar-section {
+      margin-top: 24px; background: var(--card);
+      border: 1px solid var(--border); border-radius: 10px;
+      padding: 14px 16px;
+    }
+    .similar-header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
+    .similar-keyword { color: var(--muted); font-size: 12px; margin-bottom: 12px; }
+    .similar-keyword code { background: var(--bg); padding: 2px 8px; border-radius: 8px; border: 1px solid var(--border); }
+    .similar-list {
+      display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+      gap: 8px;
+    }
+    .similar-item {
+      background: var(--bg); border: 1px solid var(--border);
+      border-radius: 8px; padding: 10px 12px; font-size: 13px;
+    }
+    .similar-item.hit { border-color: var(--ok); background: rgba(46,204,113,.08); }
+    .similar-item .title { font-weight: 600; }
+    .similar-item .meta { color: var(--muted); font-size: 11px; margin-top: 4px; }
+    .similar-item .kw { color: var(--ok); font-weight: 600; }
+    .similar-empty { color: var(--muted); font-size: 12px; padding: 12px; text-align: center; }
     details.log {
       margin-top: 20px; background: var(--card);
       border: 1px solid var(--border); border-radius: 10px; overflow: hidden;
@@ -296,6 +317,12 @@
 
         <div class="settings-fields" style="margin-top:15px;margin-bottom:0;">
           <div class="field">
+            <label for="keyword-alert-input">提醒关键字（推荐有货时也提醒，例 <code>Pro Max</code> <code>1TB</code> <code>勃艮第酒红色</code>，多个用空格 / 逗号）</label>
+            <input id="keyword-alert-input" type="text" autocomplete="off" placeholder="留空表示仅提醒你勾选的型号" />
+          </div>
+        </div>
+        <div class="settings-fields" style="margin-top:15px;margin-bottom:0;">
+          <div class="field">
             <label for="admin-key-input">设置密码（仅在 Cloudflare 配置了 ADMIN_KEY 时填写）</label>
             <input id="admin-key-input" type="password" autocomplete="current-password" placeholder="可留空" />
           </div>
@@ -308,6 +335,18 @@
     </details>
 
     <section class="grid" id="store-grid"></section>
+
+    <section class="similar-section">
+      <div class="similar-header">
+        <strong>🪄 相似机型（含所有有货的 Apple 推荐 SKU，未必在你勾选列表里）</strong>
+        <span class="muted" style="font-size:11px;" id="similar-summary">等待首次相似机型扫描…</span>
+      </div>
+      <div class="similar-keyword">
+        <span class="muted">关键字提醒：</span>
+        <code id="similar-keyword-pill">—</code>
+      </div>
+      <div class="similar-list" id="similar-list"></div>
+    </section>
 
     <details class="log" id="log-panel">
       <summary>
@@ -354,6 +393,10 @@
   const adminKeyInput = document.getElementById('admin-key-input');
   const saveSettingsBtn = document.getElementById('save-settings-btn');
   const settingsMessage = document.getElementById('settings-message');
+  const keywordAlertInput = document.getElementById('keyword-alert-input');
+  const similarSummary = document.getElementById('similar-summary');
+  const similarList = document.getElementById('similar-list');
+  const similarKeywordPill = document.getElementById('similar-keyword-pill');
   const productSearch = document.getElementById('product-search');
   const productPickerList = document.getElementById('product-picker-list');
   const productPickerStatus = document.getElementById('product-picker-status');
@@ -472,6 +515,8 @@
     intervalInput.max = 86400;
     intervalInput.value = settings.interval_seconds;
     locationInput.value = settings.location;
+    keywordAlertInput.value = settings.keyword_alert || '';
+    similarKeywordPill.textContent = settings.keyword_alert ? settings.keyword_alert : '—（仅提醒勾选型号）';
 
     const selectedProducts = new Set(settings.part_numbers);
     const selectedStores = new Set(settings.store_numbers);
@@ -710,6 +755,37 @@
     }
   }
 
+  function renderSimilar(snapshot) {
+    if (!snapshot) {
+      similarSummary.textContent = '等待首次相似机型扫描…';
+      similarList.innerHTML = '';
+      return;
+    }
+    similarSummary.textContent =
+      `${snapshot.ts || ''} · 探测 ${snapshot.total_probed || 0} 个组合 · 有货 ${snapshot.total_available || 0} 条 · 失败 ${snapshot.errored || 0} · 关键字匹配 ${(snapshot.keyword_hits || []).length}`;
+    const hitKeys = new Set((snapshot.keyword_hits || []).map((h) => h.key));
+    const items = [];
+    for (const probe of snapshot.similar || []) {
+      for (const sim of probe.similar || []) {
+        items.push({ ...sim, source_part: probe.part_number, store_number: probe.store_number });
+      }
+    }
+    if (!items.length) {
+      similarList.innerHTML = '<div class="similar-empty">本次扫描没有发现 Apple 推荐的有货相似机型。</div>';
+      return;
+    }
+    similarList.innerHTML = items.map((it) => {
+      const key = `${it.part_number}|${it.store_number}`;
+      const hit = hitKeys.has(key);
+      const title = it.title || `${it.model || ''} ${it.capacity || ''} ${it.color || ''}`.trim() || it.part_number;
+      return `<div class="similar-item ${hit ? 'hit' : ''}">
+        <div class="title">${escapeHtml(title)}${hit ? ` <span class="kw">[${escapeHtml((snapshot.tokens || []).find((tok) => title.includes(tok)) || '关键字')}]</span>` : ''}</div>
+        <div class="meta">@ ${escapeHtml(it.store_name || it.store_number)} · ${escapeHtml(it.pickup_quote || '可取货')}</div>
+        <div class="meta">源查询 ${escapeHtml(it.source_part)} · Apple part <code>${escapeHtml(it.part_number)}</code></div>
+      </div>`;
+    }).join('');
+  }
+
   document.getElementById('settings-panel').addEventListener('input', () => {
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
@@ -734,6 +810,7 @@
       location: locationInput.value.trim(),
       store_numbers: storeNumbers,
       part_numbers: partNumbers,
+      keyword_alert: keywordAlertInput.value.trim(),
     };
 
     saveSettingsBtn.disabled = true;
@@ -764,6 +841,7 @@
 
   function render(data) {
     renderSettings(data);
+    renderSimilar(data && data.last_similar);
     if (!data || data.status !== 'ok') {
       const starting = data?.status === 'starting';
       statusBadge.textContent = starting ? '等待首次检测' : ((data && data.status) || '查询失败');

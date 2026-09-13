@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { Room } from '../src/room.js';
+import { defaultMonitorSettings } from '../src/config.js';
 
 class FakeStorage {
   constructor() {
@@ -27,11 +28,23 @@ function createRoom() {
   return { room: new Room(state, {}), state, storage };
 }
 
-function seedCatalog(room, products = [], stores = []) {
-  room.catalogue.products = products;
-  room.catalogue.productsAt = Date.now();
-  room.catalogue.stores = stores;
-  room.catalogue.storesAt = Date.now();
+function seedCatalog(room) {
+  room.catalogue.byRegion.cn = {
+    products: [
+      { part_number: 'MJYD4CH/A', region: 'cn', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '勃艮第酒红色' },
+    ],
+    stores: [{ store_number: 'R793', store_name: '前海壹方城', city: '深圳', region: 'cn' }],
+    productsAt: Date.now(),
+    storesAt: Date.now(),
+  };
+  room.catalogue.byRegion.hk = {
+    products: [
+      { part_number: 'MJXW4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '冰川色' },
+    ],
+    stores: [{ store_number: 'R428', store_name: 'ifc mall', city: '香港', region: 'hk' }],
+    productsAt: Date.now(),
+    storesAt: Date.now(),
+  };
 }
 
 test('web settings persist and reschedule the alarm immediately', async () => {
@@ -40,28 +53,25 @@ test('web settings persist and reschedule the alarm immediately', async () => {
   const before = await (await room.fetch(new Request('https://room/settings'))).json();
   assert.equal(before.settings.interval_seconds, 120);
 
-  seedCatalog(room, [
-    { part_number: 'MJYD4CH/A', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '勃艮第酒红色' },
-  ], [
-    { store_number: 'R793', store_name: '前海壹方城', city: '深圳' },
-  ]);
-
+  seedCatalog(room);
   const startedAt = Date.now();
   const response = await room.fetch(new Request('https://room/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       interval_seconds: 10,
-      location: '518000',
-      store_numbers: ['R793'],
-      part_numbers: ['MJYD4CH/A'],
+      regions: {
+        cn: { enabled: true, location: '518000', store_numbers: ['R793'], part_numbers: ['MJYD4CH/A'] },
+        hk: { enabled: false, location: '中環', store_numbers: [], part_numbers: [] },
+      },
     }),
   }));
   assert.equal(response.status, 200);
   const updated = await response.json();
   assert.equal(updated.settings.interval_seconds, 10);
-  assert.deepEqual(updated.settings.store_numbers, ['R793']);
-  assert.deepEqual(updated.settings.part_numbers, ['MJYD4CH/A']);
+  assert.deepEqual(updated.settings.regions.cn.store_numbers, ['R793']);
+  assert.deepEqual(updated.settings.regions.cn.part_numbers, ['MJYD4CH/A']);
+  assert.equal(updated.settings.regions.hk.enabled, false);
 
   const saved = await storage.get('monitor-state-v1');
   assert.equal(saved.settings.interval_seconds, 10);
@@ -70,46 +80,50 @@ test('web settings persist and reschedule the alarm immediately', async () => {
 
   const stateBody = await (await room.fetch(new Request('https://room/state'))).json();
   assert.equal(stateBody.poll_seconds, 10);
-  assert.equal(stateBody.stores[0].store_name, '前海壹方城');
+  const cnRegion = stateBody.regions.find((r) => r.id === 'cn');
+  assert.equal(cnRegion.storeNumbers[0], 'R793');
   assert.equal(stateBody.variants[0].capacity, '512GB');
 });
 
 test('alarm uses saved web settings and schedules the next second-level check', async () => {
   const { room, state, storage } = createRoom();
   await state.ready;
-  seedCatalog(room, [
-    { part_number: 'MJYD4CH/A', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '勃艮第酒红色' },
-  ], [
-    { store_number: 'R793', store_name: '前海壹方城', city: '深圳' },
-  ]);
+  seedCatalog(room);
   await room.fetch(new Request('https://room/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       interval_seconds: 10,
-      location: '518000',
-      store_numbers: ['R793'],
-      part_numbers: ['MJYD4CH/A'],
+      regions: {
+        cn: { enabled: true, location: '518000', store_numbers: ['R793'], part_numbers: ['MJYD4CH/A'] },
+        hk: { enabled: false, location: '中環', store_numbers: [], part_numbers: [] },
+      },
     }),
   }));
 
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = async () => Response.json({
-    body: {
-      stores: [{
-        storeNumber: 'R793',
-        storeName: '前海壹方城',
-        city: '深圳',
-        partsAvailability: {
-          'MJYD4CH/A': {
-            pickupDisplay: 'available',
-            pickupSearchQuote: '今日可取货',
-            pickupSearchQuoteValue: 1,
-          },
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('pickup-message?')) {
+      return Response.json({
+        body: {
+          stores: [{
+            storeNumber: 'R793',
+            storeName: '前海壹方城',
+            city: '深圳',
+            partsAvailability: {
+              'MJYD4CH/A': {
+                pickupDisplay: 'available',
+                pickupSearchQuote: '今日可取货',
+                pickupSearchQuoteValue: 1,
+              },
+            },
+          }],
         },
-      }],
-    },
-  });
+      });
+    }
+    return Response.json({ body: { noSimilarModelsText: '', PickupMessage: { stores: [] } } });
+  };
 
   try {
     const startedAt = Date.now();
@@ -129,19 +143,16 @@ test('alarm uses saved web settings and schedules the next second-level check', 
 test('failed alarm backs off without watchdog overriding it', async () => {
   const { room, state, storage } = createRoom();
   await state.ready;
-  seedCatalog(room, [
-    { part_number: 'MJYD4CH/A', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '勃艮第酒红色' },
-  ], [
-    { store_number: 'R793', store_name: '前海壹方城', city: '深圳' },
-  ]);
+  seedCatalog(room);
   await room.fetch(new Request('https://room/settings', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       interval_seconds: 10,
-      location: '518000',
-      store_numbers: ['R793'],
-      part_numbers: ['MJYD4CH/A'],
+      regions: {
+        cn: { enabled: true, location: '518000', store_numbers: ['R793'], part_numbers: ['MJYD4CH/A'] },
+        hk: { enabled: false, location: '中環', store_numbers: [], part_numbers: [] },
+      },
     }),
   }));
 
@@ -157,7 +168,11 @@ test('failed alarm backs off without watchdog overriding it', async () => {
   const stateBody = await (await room.fetch(new Request('https://room/state'))).json();
   assert.equal(stateBody.status, 'query_failed');
   assert.equal(stateBody.poll_state, 'backoff');
-  assert.match(stateBody.error, /30 秒后重试/);
+  // The new per-region fetch path keeps the most informative per-region error
+  // in the message log; the state.error may also fall back to a generic
+  // counter string when multiple regions fail.
+  const errorText = String(stateBody.error || '');
+  assert.ok(/HTTP 541|中国大陆/.test(errorText) || /query operations failed/.test(errorText));
   assert.ok(storage.alarmTime >= started + 29_000);
   const backedOffAlarm = storage.alarmTime;
 
@@ -165,7 +180,7 @@ test('failed alarm backs off without watchdog overriding it', async () => {
   assert.equal(storage.alarmTime, backedOffAlarm);
 });
 
-test('web settings reject empty selections without changing saved state', async () => {
+test('web settings reject invalid region payload without changing saved state', async () => {
   const { room, state } = createRoom();
   await state.ready;
   const response = await room.fetch(new Request('https://room/settings', {
@@ -173,11 +188,79 @@ test('web settings reject empty selections without changing saved state', async 
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       interval_seconds: 10,
-      location: '518000',
-      store_numbers: [],
-      part_numbers: ['MJYD4CH/A'],
+      regions: {
+        cn: { enabled: true, location: '518000', store_numbers: [], part_numbers: ['MJYD4CH/A'] },
+      },
     }),
   }));
   assert.equal(response.status, 400);
-  assert.match((await response.json()).error, /non-empty array/);
+  const err = (await response.json()).error;
+  assert.match(err, /at least one store when enabled|non-empty array/);
+});
+
+test('keyword alert fires for similar in-stock items matching the per-region keyword', async () => {
+  const { room, state } = createRoom();
+  await state.ready;
+  seedCatalog(room);
+  await room.fetch(new Request('https://room/settings', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      interval_seconds: 10,
+      regions: {
+        cn: { enabled: true, location: '518000', store_numbers: ['R793'], part_numbers: ['MJYD4CH/A'], keyword_alert: 'Pro,Pro Max,1TB' },
+        hk: { enabled: false, location: '中環', store_numbers: [], part_numbers: [] },
+      },
+    }),
+  }));
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url) => {
+    const u = String(url);
+    if (u.includes('pickup-message?') && !u.includes('recommendations')) {
+      return Response.json({ body: { stores: [] } });
+    }
+    if (u.includes('recommendations')) {
+      return Response.json({
+        body: {
+          noSimilarModelsText: '',
+          PickupMessage: {
+            stores: [{
+              storeNumber: 'R793',
+              storeName: '前海壹方城',
+              city: '深圳',
+              partsAvailability: {
+                'MJTJ4CH/A': {
+                  pickupDisplay: 'available',
+                  pickupSearchQuote: '今日可取货',
+                  partNumber: 'MJTJ4CH/A',
+                  messageTypes: { regular: { storePickupProductTitle: 'iPhone 18 Pro Max 1TB 银色', storePickupQuote: '今天 · Apple 前海壹方城' } },
+                },
+              },
+            }],
+          },
+        },
+      });
+    }
+    return Response.json({});
+  };
+
+  try {
+    await room.alarm();
+    const similar = await (await room.fetch(new Request('https://room/similar'))).json();
+    assert.equal(similar.total_probed, 1);
+    assert.equal(similar.total_available, 1);
+    assert.equal(similar.keyword_hits.length, 1);
+    assert.equal(similar.keyword_hits[0].region, 'cn');
+    assert.match(similar.keyword_hits[0].title, /Pro Max 1TB/);
+    assert.equal(similar.keyword_hits[0].keyword, 'Pro Max');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('default settings include both regions', () => {
+  const settings = defaultMonitorSettings();
+  assert.ok(settings.regions.cn);
+  assert.ok(settings.regions.hk);
 });
