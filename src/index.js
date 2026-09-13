@@ -88,9 +88,8 @@ export default {
   },
 
   /**
-   * Cron trigger — runs every 2 minutes. Cloudflare Workers free plan
-   * supports cron ≥ 1 min; */2 keeps the average below the 30s rate-limit
-   * threshold we saw when scraping from a single residential IP.
+   * Cron trigger — runs every 2 minutes (cron "*/2 * * * *"). Above the
+   * 30s rate-limit threshold we hit when scraping from one residential IP.
    */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runTick(env));
