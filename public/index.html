@@ -556,12 +556,18 @@
     // for the picker to be useful immediately.  The dashboard still tries
     // to refresh from `/api/search/products?region=hk` and the user can
     // add or remove any part_number via the manual input box.
+    // Colors reflect the official Apple HK naming for iPhone 18 Pro Max /
+    // Pro / Air / 17 / 17e (繁體中文 as Apple HK renders them):
+    //   iPhone 18 Pro / Pro Max: 布根地紅色, 冰川色, 銀色, 黑色
+    //   iPhone Air:               天藍色, 淺金色, 銀色, 太空黑色
+    //   iPhone 17:                黑色, 白色, 薰衣草紫色, 鼠尾草綠色, 霧藍色
+    //   iPhone 17e:               黑色, 白色
     hk: [
       { part_number: 'MJXW4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '冰川色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxw4za/a' },
-      { part_number: 'MJXV4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '原色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxv4za/a' },
-      { part_number: 'MJXT4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '原色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxt4za/a' },
-      { part_number: 'MJXP4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '黑色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxp4za/a' },
-      { part_number: 'MJT14ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '1TB', color: '原色鈦金屬', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjt14za/a' },
+      { part_number: 'MJXV4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '512GB', color: '黑色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxv4za/a' },
+      { part_number: 'MJXT4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '黑色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxt4za/a' },
+      { part_number: 'MJXP4ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '256GB', color: '布根地紅色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjxp4za/a' },
+      { part_number: 'MJT14ZA/A', region: 'hk', model: 'iPhone 18 Pro Max', capacity: '1TB', color: '冰川色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-18-pro/mjt14za/a' },
       { part_number: 'MG6W4ZA/A', region: 'hk', model: 'iPhone 17', capacity: '256GB', color: '黑色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-17/mg6w4za/a' },
       { part_number: 'MG6X4ZA/A', region: 'hk', model: 'iPhone 17', capacity: '256GB', color: '白色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-17/mg6x4za/a' },
       { part_number: 'MHY04ZA/A', region: 'hk', model: 'iPhone Air', capacity: '256GB', color: '天藍色', purchase_url: 'https://www.apple.com/hk-zh/shop/buy-iphone/iphone-air/mhy04za/a' },
@@ -621,6 +627,39 @@
       }
     }
     return set;
+  }
+
+  // Same merge logic as `renderPicker`, but exposed so checkbox change
+  // handlers can update just the "selected" pills without rebuilding the
+  // entire picker (which would shift the user's click target).
+  function allCatalogueProducts() {
+    const list = [];
+    for (const regionId of enabledRegions) {
+      for (const p of mergeRegionCatalogue(null, regionId)) {
+        list.push({ ...p, region: p.region || regionId });
+      }
+    }
+    return list;
+  }
+
+  function allCatalogueStores() {
+    const list = [];
+    for (const regionId of enabledRegions) {
+      for (const s of mergeRegionStores(regionId)) {
+        list.push({ ...s, region: s.region || regionId });
+      }
+    }
+    return list;
+  }
+
+  function saveIndicator() {
+    if (!settingsDirty || !settingsLoaded) return;
+    const parts = allSelectedProducts().size;
+    const stores = allSelectedStores().size;
+    settingsMessage.textContent = `有未保存的修改（${parts} SKU + ${stores} 店）`;
+    settingsMessage.className = 'settings-message bad';
+    saveSettingsBtn.textContent = `💾 保存（${parts + stores} 项）`;
+    saveSettingsBtn.style.background = 'var(--warn)';
   }
 
   function locationForPrimary() {
@@ -865,9 +904,6 @@
     const target = ev.target;
     if (target?.matches('input[type="checkbox"][data-kind="product"]')) {
       const part = target.dataset.partNumber;
-      // Detect whether the row came from the manual input box (catalogue
-      // didn't have it).  If so, tombstones the value so it stays cancelled
-      // until the user re-types or saves.
       const isManual = part && parseManualTokens(manualPartInput.value).includes(part);
       if (!target.checked && isManual) {
         tombstonedParts.add(part);
@@ -875,10 +911,14 @@
         tombstonedParts.delete(part);
       }
     }
+    // Only re-render the "selected" summary pills, not the picker list
+    // itself — re-creating checkboxes on every change makes the UI feel
+    // laggy and the user's click target shifts under their cursor.
+    renderSelectedProducts(allCatalogueProducts(), allSelectedProducts());
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderPicker();
+    saveIndicator();
   });
   storePickerList.addEventListener('change', (ev) => {
     const target = ev.target;
@@ -891,10 +931,11 @@
         tombstonedStores.delete(store);
       }
     }
+    renderSelectedStores(allCatalogueStores(), allSelectedStores());
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
-    renderPicker();
+    saveIndicator();
   });
 
   productRefreshBtn.addEventListener('click', () => refreshProducts(productSearch.value.trim()));
@@ -1012,6 +1053,7 @@
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
     renderPicker();
+    saveIndicator();
   });
   manualStoreInput.addEventListener('input', () => {
     for (const token of parseManualTokens(manualStoreInput.value)) tombstonedStores.delete(token);
@@ -1019,6 +1061,7 @@
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
     renderPicker();
+    saveIndicator();
   });
 
   async function bootstrapCatalogue() {
@@ -1169,6 +1212,8 @@
       settingsLoaded = false;
       settingsMessage.textContent = '保存成功，已安排立即检测';
       settingsMessage.className = 'settings-message ok';
+      saveSettingsBtn.textContent = '保存并立即检测';
+      saveSettingsBtn.style.background = '';
       const regionSummary = enabledRegions.map((id) => regions[id].label).join(' + ');
       showToast('设置已保存', `${regionSummary} · 每 ${result.settings.interval_seconds} 秒`);
       // Saved values are now in settings; clear tombstones.

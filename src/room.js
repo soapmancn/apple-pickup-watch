@@ -190,11 +190,17 @@ export class Room {
       settings: this.settings,
       regions: listRegions().map((region) => {
         const r = this.catalogue.byRegion[region.id] || { products: [], stores: [], productsAt: 0, storesAt: 0 };
+        const regionConfig = (this.regionConfigs || []).find((rc) => rc.id === region.id) || {};
         return {
           id: region.id,
           label: region.label,
           part_suffix: region.part_suffix,
           purchase_base: region.purchase_base,
+          enabled: regionConfig.enabled !== false,
+          location: regionConfig.location || this.settings?.regions?.[region.id]?.location || '',
+          store_numbers: regionConfig.storeNumbers || this.settings?.regions?.[region.id]?.store_numbers || [],
+          parts: regionConfig.parts || this.settings?.regions?.[region.id]?.part_numbers || [],
+          keyword_alert: regionConfig.keywordAlert || this.settings?.regions?.[region.id]?.keyword_alert || '',
           products: r.products,
           stores: r.stores,
           products_at: r.productsAt,
