@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>iPhone 18 Pro Max 深圳库存监控</title>
+  <title>Apple 到店库存监控</title>
   <style>
     :root {
       --bg: #0f1115; --card: #181b22; --border: #2a2f3a;
@@ -132,18 +132,97 @@
     }
     .conn-state.on  { background: rgba(46,204,113,.15);  color: var(--ok); }
     .conn-state.off { background: rgba(231,76,60,.15);   color: var(--bad); }
+    .settings-panel {
+      margin-bottom: 24px; background: var(--card); border: 1px solid var(--border);
+      border-radius: 10px; overflow: hidden;
+    }
+    .settings-panel > summary {
+      cursor: pointer; padding: 13px 16px; font-size: 14px; font-weight: 600;
+      display: flex; align-items: center; justify-content: space-between; list-style: none;
+    }
+    .settings-panel > summary::-webkit-details-marker { display: none; }
+    .settings-panel > summary::after { content: "展开"; color: var(--muted); font-size: 12px; font-weight: 400; }
+    .settings-panel[open] > summary::after { content: "收起"; }
+    .settings-body { border-top: 1px solid var(--border); padding: 16px; }
+    .settings-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 16px; }
+    .field label, .choice-group > .group-label { display: block; color: var(--muted); font-size: 12px; margin-bottom: 6px; }
+    .field input {
+      width: 100%; background: var(--bg); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 7px; padding: 9px 10px; font-size: 13px; outline: none;
+    }
+    .field input:focus { border-color: var(--accent); }
+    .choice-group { margin-top: 15px; }
+    .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 8px; }
+    .choice {
+      display: flex; gap: 9px; align-items: flex-start; padding: 10px 11px;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+      cursor: pointer; font-size: 13px;
+    }
+    .choice:has(input:checked) { border-color: var(--accent); background: rgba(106,169,255,.08); }
+    .choice input { margin-top: 2px; accent-color: var(--accent); }
+    .choice .sub { display: block; color: var(--muted); font-size: 11px; margin-top: 2px; }
+    .settings-actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+    .save-btn {
+      background: var(--accent); color: #fff; border: none; padding: 9px 16px;
+      border-radius: 7px; cursor: pointer; font-size: 13px; font-weight: 600;
+    }
+    .save-btn:disabled { opacity: .55; cursor: wait; }
+    .refresh-btn {
+      background: transparent; color: var(--accent); border: 1px solid var(--accent);
+      padding: 7px 12px; border-radius: 7px; cursor: pointer; font-size: 12px;
+    }
+    .refresh-btn:disabled { opacity: .55; cursor: wait; }
+    .picker {
+      margin-top: 16px; border: 1px solid var(--border); border-radius: 8px;
+      background: var(--bg); padding: 14px;
+    }
+    .picker-header { display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }
+    .picker-header input[type="search"] {
+      flex: 1; background: var(--card); color: var(--fg); border: 1px solid var(--border);
+      border-radius: 7px; padding: 8px 10px; font-size: 13px; outline: none;
+    }
+    .picker-header input[type="search"]:focus { border-color: var(--accent); }
+    .picker-status { color: var(--muted); font-size: 11px; }
+    .picker-list {
+      max-height: 260px; overflow-y: auto; display: grid; gap: 6px;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    .picker-item {
+      display: flex; gap: 8px; align-items: flex-start; padding: 8px 10px;
+      background: var(--card); border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer; font-size: 12px;
+    }
+    .picker-item:has(input:checked) { border-color: var(--accent); background: rgba(106,169,255,.08); }
+    .picker-item input { margin-top: 2px; accent-color: var(--accent); }
+    .picker-item .sub { display: block; color: var(--muted); font-size: 10px; margin-top: 1px; }
+    .picker-empty { color: var(--muted); font-size: 12px; padding: 18px; text-align: center; }
+    .summary-pill {
+      display: inline-block; padding: 2px 8px; background: var(--card);
+      border: 1px solid var(--border); border-radius: 10px; font-size: 12px;
+      color: var(--muted); margin-right: 4px;
+    }
+    .selected-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .selected-list:empty { display: none; }
+    .settings-message { color: var(--muted); font-size: 12px; }
+    .settings-message.ok { color: var(--ok); }
+    .settings-message.bad { color: var(--bad); }
+    @media (max-width: 680px) {
+      main, header { padding-left: 16px; padding-right: 16px; }
+      .settings-fields { grid-template-columns: 1fr; }
+      .log-row { grid-template-columns: 1fr; gap: 3px; }
+    }
   </style>
 </head>
 <body>
   <header>
     <div>
       <h1>
-        iPhone 18 Pro Max · 深圳到店库存
+        Apple 到店库存监控
         <span id="status-badge" class="badge idle">加载中</span>
         <span id="conn-state" class="conn-state off">未连接</span>
       </h1>
       <div class="meta">
-        <span>门店：深圳万象城（R761）/ 深圳益田假日广场（R484）/ 前海壹方城（R793）</span><br>
+        <span id="active-summary">正在读取监控设置…</span><br>
         <span>上次更新：<code id="last-check">—</code> · 监控频率：<code id="poll-secs">—</code></span>
       </div>
     </div>
@@ -162,6 +241,54 @@
       <div class="stat"><div class="label">SSE 连接</div><div class="value" id="stat-sse">—</div></div>
     </section>
 
+    <details class="settings-panel" id="settings-panel">
+      <summary>⚙️ 监控设置 <span style="color:var(--muted);font-size:12px;font-weight:400;">网页修改后立即生效</span></summary>
+      <div class="settings-body">
+        <div class="settings-fields">
+          <div class="field">
+            <label for="interval-input">监控间隔（秒）</label>
+            <input id="interval-input" type="number" min="10" max="86400" step="1" inputmode="numeric" />
+          </div>
+          <div class="field">
+            <label for="location-input">查询位置 / 邮编</label>
+            <input id="location-input" type="text" placeholder="例如 518000" />
+          </div>
+        </div>
+        <div class="picker">
+          <div class="picker-header">
+            <strong style="font-size:13px;">📱 手机型号 · 容量 · 颜色</strong>
+            <span class="picker-status" id="product-picker-status">首次打开自动拉取 Apple 在售 SKU</span>
+            <button class="refresh-btn" id="product-refresh-btn">重新拉取</button>
+          </div>
+          <input type="search" id="product-search" placeholder="搜索 iPhone 17 Pro、512GB、酒红色…" autocomplete="off">
+          <div class="picker-list" id="product-picker-list"></div>
+          <div class="selected-list" id="product-selected-list"></div>
+        </div>
+
+        <div class="picker">
+          <div class="picker-header">
+            <strong style="font-size:13px;">📍 监控 Apple Store</strong>
+            <span class="picker-status" id="store-picker-status">输入城市/邮编，例：北京、上海、510000</span>
+            <button class="refresh-btn" id="store-refresh-btn">重新搜索</button>
+          </div>
+          <input type="search" id="store-search" placeholder="输入城市、邮编或地址" autocomplete="off">
+          <div class="picker-list" id="store-picker-list"></div>
+          <div class="selected-list" id="store-selected-list"></div>
+        </div>
+
+        <div class="settings-fields" style="margin-top:15px;margin-bottom:0;">
+          <div class="field">
+            <label for="admin-key-input">设置密码（仅在 Cloudflare 配置了 ADMIN_KEY 时填写）</label>
+            <input id="admin-key-input" type="password" autocomplete="current-password" placeholder="可留空" />
+          </div>
+        </div>
+        <div class="settings-actions">
+          <button class="save-btn" id="save-settings-btn">保存并立即检测</button>
+          <span class="settings-message" id="settings-message">设置保存在 Durable Object 中，无需重新部署。</span>
+        </div>
+      </div>
+    </details>
+
     <section class="grid" id="store-grid"></section>
 
     <details class="log" id="log-panel">
@@ -177,7 +304,7 @@
 
   <footer>
     数据源：<a style="color:var(--accent)" href="https://www.apple.com.cn/shop/retail/pickup-message" target="_blank">apple.com.cn/shop/retail/pickup-message</a>
-    · 部署在 Cloudflare Workers，全球边缘 IP 轮换
+    · 部署在 Cloudflare Workers + Durable Objects
   </footer>
 
   <div class="toast" id="toast">
@@ -201,6 +328,27 @@
   const toastBody = document.getElementById('toast-body');
   const logBody = document.getElementById('log-body');
   const logCount = document.getElementById('log-count');
+  const activeSummary = document.getElementById('active-summary');
+  const intervalInput = document.getElementById('interval-input');
+  const locationInput = document.getElementById('location-input');
+  const storeChoices = document.getElementById('store-choices');
+  const productChoices = document.getElementById('product-choices');
+  const adminKeyInput = document.getElementById('admin-key-input');
+  const saveSettingsBtn = document.getElementById('save-settings-btn');
+  const settingsMessage = document.getElementById('settings-message');
+  const productSearch = document.getElementById('product-search');
+  const productPickerList = document.getElementById('product-picker-list');
+  const productPickerStatus = document.getElementById('product-picker-status');
+  const productRefreshBtn = document.getElementById('product-refresh-btn');
+  const productSelectedList = document.getElementById('product-selected-list');
+  const storeSearch = document.getElementById('store-search');
+  const storePickerList = document.getElementById('store-picker-list');
+  const storePickerStatus = document.getElementById('store-picker-status');
+  const storeRefreshBtn = document.getElementById('store-refresh-btn');
+  const storeSelectedList = document.getElementById('store-selected-list');
+
+  let settingsDirty = false;
+  let settingsLoaded = false;
 
   let prevAvailable = new Set();
   let firstLoad = true;
@@ -283,11 +431,286 @@
     flashTitle(title);
   }
 
+  function escapeHtml(value) {
+    return String(value ?? '').replace(/[<>&"']/g, (char) => ({
+      '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;', "'": '&#39;',
+    }[char]));
+  }
+
+  function renderSettings(data) {
+    const settings = data?.settings;
+    const catalog = data?.catalog || data?.options?.catalog;
+    if (!settings) return;
+    if (settingsDirty && settingsLoaded) return;
+
+    const products = Array.isArray(catalog?.products) ? catalog.products : [];
+    const stores = Array.isArray(catalog?.stores) ? catalog.stores : [];
+    productCatalogue = products;
+    storeCatalogue = stores;
+
+    intervalInput.min = 10;
+    intervalInput.max = 86400;
+    intervalInput.value = settings.interval_seconds;
+    locationInput.value = settings.location;
+
+    const selectedProducts = new Set(settings.part_numbers);
+    const selectedStores = new Set(settings.store_numbers);
+
+    productFilterText = '';
+    productSearch.value = '';
+    renderProductPicker(products, selectedProducts, productFilterText);
+
+    if (storeSearch.value !== settings.location) storeSearch.value = settings.location;
+    storeFilterText = settings.location || '';
+    renderStorePicker(stores, selectedStores, storeFilterText);
+
+    settingsLoaded = true;
+  }
+
+  let productCatalogue = [];
+  let storeCatalogue = [];
+  let productFilterText = '';
+  let storeFilterText = '';
+
+  function renderProductPicker(all, selected, filterText) {
+    const term = (filterText || '').trim().toLowerCase();
+    const filtered = !term ? all : all.filter((p) => {
+      const hay = `${p.model || ''} ${p.capacity || ''} ${p.color || ''} ${p.part_number || ''}`.toLowerCase();
+      return hay.includes(term);
+    });
+    if (!all.length) {
+      productPickerList.innerHTML = '<div class="picker-empty">还没有可用的 iPhone SKU，点击「重新拉取」从 Apple 官网同步。</div>';
+      productPickerStatus.textContent = '尚未拉取 SKU';
+      productSelectedList.innerHTML = '';
+      return;
+    }
+    if (!filtered.length) {
+      productPickerList.innerHTML = '<div class="picker-empty">没有匹配项，输入关键字搜索。</div>';
+    } else {
+      productPickerList.innerHTML = filtered.map((p) => `
+        <label class="picker-item">
+          <input type="checkbox" data-part-number="${escapeHtml(p.part_number)}" data-kind="product" ${selected.has(p.part_number) ? 'checked' : ''}>
+          <span>
+            <strong>${escapeHtml(p.model || '')}</strong> · ${escapeHtml(p.capacity || '')}
+            <span class="sub">${escapeHtml(p.color || '')} · ${escapeHtml(p.part_number)}</span>
+          </span>
+        </label>`).join('');
+    }
+    productPickerStatus.textContent = `共 ${all.length} 个 SKU · 显示 ${filtered.length} 个 · 已选 ${selected.size}`;
+    renderSelectedProducts(all, selected);
+  }
+
+  function renderSelectedProducts(all, selected) {
+    if (!selected.size) { productSelectedList.innerHTML = ''; return; }
+    const map = new Map(all.map((p) => [p.part_number, p]));
+    productSelectedList.innerHTML = [...selected].map((pn) => {
+      const p = map.get(pn) || { part_number: pn };
+      return `<span class="summary-pill">${escapeHtml(p.model || 'iPhone')} ${escapeHtml(p.capacity || '')} ${escapeHtml(p.color || '')} <code>${escapeHtml(p.part_number)}</code></span>`;
+    }).join('');
+  }
+
+  function renderStorePicker(all, selected, filterText) {
+    const term = (filterText || '').trim().toLowerCase();
+    const filtered = !term ? all : all.filter((s) => {
+      const hay = `${s.store_name || ''} ${s.city || ''} ${s.state || ''} ${s.store_number || ''} ${s.address || ''}`.toLowerCase();
+      return hay.includes(term);
+    });
+    if (!all.length) {
+      storePickerList.innerHTML = '<div class="picker-empty">输入城市/邮编后点击「重新搜索」拉取附近的 Apple Store。</div>';
+      storePickerStatus.textContent = '请输入城市或邮编';
+      storeSelectedList.innerHTML = '';
+      return;
+    }
+    if (!filtered.length) {
+      storePickerList.innerHTML = '<div class="picker-empty">没有匹配项，试试别的关键字。</div>';
+    } else {
+      storePickerList.innerHTML = filtered.map((s) => `
+        <label class="picker-item">
+          <input type="checkbox" data-store-number="${escapeHtml(s.store_number)}" data-kind="store" ${selected.has(s.store_number) ? 'checked' : ''}>
+          <span>
+            <strong>${escapeHtml(s.store_name)}</strong>
+            <span class="sub">${escapeHtml(s.city || '')} · ${escapeHtml(s.store_number)}</span>
+          </span>
+        </label>`).join('');
+    }
+    storePickerStatus.textContent = `共 ${all.length} 家店 · 显示 ${filtered.length} 家 · 已选 ${selected.size}`;
+    renderSelectedStores(all, selected);
+  }
+
+  function renderSelectedStores(all, selected) {
+    if (!selected.size) { storeSelectedList.innerHTML = ''; return; }
+    const map = new Map(all.map((s) => [s.store_number, s]));
+    storeSelectedList.innerHTML = [...selected].map((sn) => {
+      const s = map.get(sn) || { store_number: sn };
+      return `<span class="summary-pill">${escapeHtml(s.store_name || sn)} <code>${escapeHtml(s.store_number)}</code></span>`;
+    }).join('');
+  }
+
+  productSearch.addEventListener('input', () => {
+    productFilterText = productSearch.value;
+    renderProductPicker(productCatalogue, readSelectedProducts(), productFilterText);
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+  });
+
+  storeSearch.addEventListener('input', () => {
+    storeFilterText = storeSearch.value;
+    renderStorePicker(storeCatalogue, readSelectedStores(), storeFilterText);
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+  });
+
+  productPickerList.addEventListener('change', () => {
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+    renderProductPicker(productCatalogue, readSelectedProducts(), productFilterText);
+  });
+  storePickerList.addEventListener('change', () => {
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+    renderStorePicker(storeCatalogue, readSelectedStores(), storeFilterText);
+  });
+
+  productRefreshBtn.addEventListener('click', () => refreshProducts(productSearch.value.trim()));
+  storeRefreshBtn.addEventListener('click', () => refreshStores(storeSearch.value.trim() || locationInput.value.trim()));
+
+  let refreshSeq = 0;
+  async function refreshProducts(query) {
+    productRefreshBtn.disabled = true;
+    productPickerStatus.textContent = query ? `搜索中：${query}…` : '拉取 Apple 在售 SKU 中…';
+    try {
+      const url = query ? `/api/search/products?q=${encodeURIComponent(query)}` : '/api/search/products';
+      const res = await fetch(url);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const products = Array.isArray(json.products) ? json.products : [];
+      productCatalogue = products;
+      productFilterText = productSearch.value;
+      renderProductPicker(products, readSelectedProducts(), productFilterText);
+    } catch (err) {
+      productPickerStatus.textContent = `拉取失败：${err.message || err}`;
+    } finally {
+      productRefreshBtn.disabled = false;
+    }
+  }
+
+  async function refreshStores(query) {
+    storeRefreshBtn.disabled = true;
+    storePickerStatus.textContent = `搜索附近门店：${query || '默认位置'}…`;
+    try {
+      const url = query ? `/api/search/stores?q=${encodeURIComponent(query)}` : '/api/search/stores';
+      const res = await fetch(url);
+      const json = await res.json().catch(() => ({}));
+      if (!res.ok || !json.ok) throw new Error(json.error || `HTTP ${res.status}`);
+      const stores = Array.isArray(json.stores) ? json.stores : [];
+      storeCatalogue = stores;
+      storeFilterText = storeSearch.value;
+      renderStorePicker(stores, readSelectedStores(), storeFilterText);
+      // Also persist the catalogue in the durable object so a refresh keeps
+      // the same list across reloads.
+      fetch('/api/catalog', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ products: false, location: query || locationInput.value.trim() }),
+      }).catch(() => {});
+    } catch (err) {
+      storePickerStatus.textContent = `搜索失败：${err.message || err}`;
+    } finally {
+      storeRefreshBtn.disabled = false;
+    }
+  }
+
+  function readSelectedProducts() {
+    return new Set([...document.querySelectorAll('input[data-kind="product"]:checked')].map((i) => i.dataset.partNumber));
+  }
+  function readSelectedStores() {
+    return new Set([...document.querySelectorAll('input[data-kind="store"]:checked')].map((i) => i.dataset.storeNumber));
+  }
+
+  async function bootstrapCatalogue() {
+    // Trigger a one-time refresh so the dashboard is populated even on cold
+    // open; ignore errors (the user can retry manually).
+    try {
+      await Promise.allSettled([
+        fetch('/api/catalog', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ products: true, stores: true, location: locationInput.value.trim() || '518000' }),
+        }),
+      ]);
+    } catch (err) {
+      /* noop */
+    }
+  }
+
+  document.getElementById('settings-panel').addEventListener('input', () => {
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+  });
+
+  saveSettingsBtn.addEventListener('click', async () => {
+    const storeNumbers = [...readSelectedStores()];
+    const partNumbers = [...readSelectedProducts()];
+    if (storeNumbers.length === 0) {
+      settingsMessage.textContent = '请至少选择一家 Apple Store';
+      settingsMessage.className = 'settings-message bad';
+      return;
+    }
+    if (partNumbers.length === 0) {
+      settingsMessage.textContent = '请至少选择一款 iPhone SKU';
+      settingsMessage.className = 'settings-message bad';
+      return;
+    }
+    const payload = {
+      interval_seconds: Number(intervalInput.value),
+      location: locationInput.value.trim(),
+      store_numbers: storeNumbers,
+      part_numbers: partNumbers,
+    };
+
+    saveSettingsBtn.disabled = true;
+    settingsMessage.textContent = '正在保存…';
+    settingsMessage.className = 'settings-message';
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (adminKeyInput.value) headers['X-Admin-Key'] = adminKeyInput.value;
+      const response = await fetch('/api/settings', {
+        method: 'POST', headers, body: JSON.stringify(payload),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`);
+      settingsDirty = false;
+      settingsLoaded = false;
+      settingsMessage.textContent = '保存成功，已安排立即检测';
+      settingsMessage.className = 'settings-message ok';
+      showToast('设置已保存', `每 ${result.settings.interval_seconds} 秒检测一次`);
+      await fetchState();
+      await fetchLog();
+    } catch (err) {
+      settingsMessage.textContent = `保存失败：${err.message || err}`;
+      settingsMessage.className = 'settings-message bad';
+    } finally {
+      saveSettingsBtn.disabled = false;
+    }
+  });
+
   function render(data) {
+    renderSettings(data);
     if (!data || data.status !== 'ok') {
-      statusBadge.textContent = (data && data.status) || '查询失败';
-      statusBadge.className = 'badge bad';
+      const starting = data?.status === 'starting';
+      statusBadge.textContent = starting ? '等待首次检测' : ((data && data.status) || '查询失败');
+      statusBadge.className = starting ? 'badge idle' : 'badge bad';
       lastCheckEl.textContent = (data && data.last_attempt_at) || '—';
+      if (starting) {
+        grid.innerHTML = '<div class="log-empty">设置已保存，正在执行首次库存检测…</div>';
+        statAvail.textContent = '—';
+        statMiss.textContent = '—';
+      }
       if (typeof data?.poll_seconds === 'number') {
         pollSecsEl.textContent = `每 ${data.poll_seconds} 秒`;
         pollSecsEl.style.color = data.poll_state === 'backoff' ? 'var(--warn)' : '';
@@ -315,7 +738,7 @@
       storeEl.className = 'store';
       const h3 = document.createElement('h3');
       const availHere = info.items.filter((o) => o.pickup_display === 'available').length;
-      h3.innerHTML = `${info.name} <span class="count ${availHere ? 'has' : 'zero'}">${availHere}/${info.items.length} 有货</span>`;
+      h3.innerHTML = `${escapeHtml(info.name)} <span class="count ${availHere ? 'has' : 'zero'}">${availHere}/${info.items.length} 有货</span>`;
       storeEl.appendChild(h3);
       const ul = document.createElement('ul');
       for (const o of info.items) {
@@ -326,11 +749,11 @@
         if (newKey) li.classList.add('flash');
         li.innerHTML = `
           <div class="sku">
-            <div class="label">${o.part_number}</div>
-            <div class="sub">${o.color || ''} · ${o.capacity || ''}</div>
+            <div class="label">${escapeHtml(o.model || 'iPhone')} · ${escapeHtml(o.capacity || '')}</div>
+            <div class="sub">${escapeHtml(o.color || '')} · ${escapeHtml(o.part_number)}</div>
           </div>
           <span class="status ${o.pickup_display === 'available' ? 'avail' : 'unavail'}">
-            ${o.pickup_quote || (o.pickup_display === 'available' ? '可取货' : '暂无供应')}
+            ${escapeHtml(o.pickup_quote || (o.pickup_display === 'available' ? '可取货' : '暂无供应'))}
           </span>`;
         ul.appendChild(li);
       }
@@ -418,10 +841,20 @@
     }
   }
 
-  fetchState();
-  connectSSE();
-  fetchLog();
-  setInterval(fetchLog, 5000);
+  async function init() {
+    await fetchState();
+    if (!productCatalogue.length || !storeCatalogue.length) {
+      await bootstrapCatalogue();
+      await fetchState();
+    } else {
+      bootstrapCatalogue();
+    }
+    connectSSE();
+    await fetchLog();
+    setInterval(fetchLog, 5000);
+  }
+
+  init();
   </script>
 </body>
 </html>

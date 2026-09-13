@@ -1,59 +1,61 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { getMonitorConfig, isScheduledCheckDue } from '../src/config.js';
+import {
+  defaultMonitorSettings,
+  normalizeMonitorSettings,
+  buildMonitorConfig,
+  SEED_PART_NUMBERS,
+  SEED_STORE_NUMBERS,
+  MIN_INTERVAL_SECONDS,
+  MAX_INTERVAL_SECONDS,
+} from '../src/config.js';
 
-test('uses existing monitor defaults when variables are absent', () => {
-  const config = getMonitorConfig({});
-  assert.equal(config.intervalMinutes, 2);
-  assert.equal(config.pollSeconds, 120);
-  assert.equal(config.products.length, 6);
-  assert.equal(config.stores.length, 3);
-  assert.equal(config.location, '518000');
+test('defaults seed three Shenzhen stores and six iPhone 18 Pro Max SKUs', () => {
+  const settings = defaultMonitorSettings();
+  assert.equal(settings.interval_seconds, 120);
+  assert.equal(settings.location, '518000');
+  assert.deepEqual(settings.store_numbers, SEED_STORE_NUMBERS);
+  assert.deepEqual(settings.part_numbers, SEED_PART_NUMBERS);
+  assert.equal(SEED_STORE_NUMBERS.length, 3);
+  assert.ok(SEED_STORE_NUMBERS.every((sn) => /^R\d+$/.test(sn)));
+  assert.equal(SEED_PART_NUMBERS.length, 6);
+  assert.ok(SEED_PART_NUMBERS.every((pn) => /CH\/A$/.test(pn)));
 });
 
-test('parses interval, stores, products and location from variables', () => {
-  const config = getMonitorConfig({
-    CHECK_INTERVAL_MINUTES: '5',
-    MONITOR_LOCATION: '200000',
-    MONITOR_STORES_JSON: JSON.stringify([
-      { store_number: 'R001', store_name: '测试门店', city: '上海' },
-    ]),
-    MONITOR_PRODUCTS_JSON: JSON.stringify([
-      { part_number: 'TEST/A', model: 'iPhone Test', capacity: '1TB', color: '黑色' },
-    ]),
+test('normalization rejects out-of-range intervals, empty selections, duplicates', () => {
+  assert.throws(() => normalizeMonitorSettings({ interval_seconds: 5, location: '518000', store_numbers: ['R761'], part_numbers: ['MJY84CH/A'] }));
+  assert.throws(() => normalizeMonitorSettings({ interval_seconds: MAX_INTERVAL_SECONDS + 1, location: '518000', store_numbers: ['R761'], part_numbers: ['MJY84CH/A'] }));
+  assert.throws(() => normalizeMonitorSettings({ interval_seconds: 120, location: '', store_numbers: ['R761'], part_numbers: ['MJY84CH/A'] }));
+  assert.throws(() => normalizeMonitorSettings({ interval_seconds: 120, location: '518000', store_numbers: [], part_numbers: ['MJY84CH/A'] }));
+  assert.throws(() => normalizeMonitorSettings({ interval_seconds: 120, location: '518000', store_numbers: ['R761', 'R761'], part_numbers: ['MJY84CH/A'] }));
+  assert.throws(() => normalizeMonitorSettings({ interval_seconds: 120, location: '518000', store_numbers: ['R761'], part_numbers: [''] }));
+});
+
+test('normalization accepts arbitrary store and part numbers (no whitelist)', () => {
+  const settings = normalizeMonitorSettings({
+    interval_seconds: MIN_INTERVAL_SECONDS,
+    location: '100000',
+    store_numbers: ['R448', 'R479', 'R761'],
+    part_numbers: ['MG6W4CH/A', 'MJY84CH/A'],
   });
-
-  assert.equal(config.intervalMinutes, 5);
-  assert.equal(config.pollSeconds, 300);
-  assert.deepEqual(config.storeNumbers, ['R001']);
-  assert.deepEqual(config.parts, ['TEST/A']);
-  assert.equal(config.products[0].capacity, '1TB');
-  assert.equal(config.location, '200000');
+  assert.equal(settings.interval_seconds, MIN_INTERVAL_SECONDS);
+  assert.deepEqual(settings.store_numbers, ['R448', 'R479', 'R761']);
+  assert.deepEqual(settings.part_numbers, ['MG6W4CH/A', 'MJY84CH/A']);
 });
 
-test('runs only on minute buckets matching the configured interval', () => {
-  assert.equal(isScheduledCheckDue(10 * 60_000, 5), true);
-  assert.equal(isScheduledCheckDue(11 * 60_000, 5), false);
-  assert.equal(isScheduledCheckDue(11 * 60_000, 1), true);
-});
-
-test('rejects malformed or unsafe variable values', () => {
-  assert.throws(
-    () => getMonitorConfig({ CHECK_INTERVAL_MINUTES: '0' }),
-    /integer from 1 to 1440/,
-  );
-  assert.throws(
-    () => getMonitorConfig({ MONITOR_STORES_JSON: 'not-json' }),
-    /valid JSON/,
-  );
-  assert.throws(
-    () => getMonitorConfig({
-      MONITOR_PRODUCTS_JSON: JSON.stringify([
-        { part_number: 'X', model: 'A', capacity: '1TB' },
-        { part_number: 'X', model: 'B', capacity: '2TB' },
-      ]),
-    }),
-    /must be unique/,
-  );
+test('buildMonitorConfig exposes parts/storeNumbers but leaves product + store detail empty', () => {
+  const config = buildMonitorConfig({
+    interval_seconds: 60,
+    location: '510000',
+    store_numbers: ['R479', 'R761'],
+    part_numbers: ['MJY84CH/A'],
+  });
+  assert.equal(config.intervalSeconds, 60);
+  assert.equal(config.pollSeconds, 60);
+  assert.equal(config.location, '510000');
+  assert.deepEqual(config.parts, ['MJY84CH/A']);
+  assert.deepEqual(config.storeNumbers, ['R479', 'R761']);
+  assert.deepEqual(config.products, []);
+  assert.deepEqual(config.stores, []);
 });

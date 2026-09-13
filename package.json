@@ -1,7 +1,7 @@
 {
   "name": "apple-pickup-watch",
   "version": "1.0.0",
-  "description": "iPhone 18 Pro Max 深圳库存监控 · Cloudflare Workers + Durable Objects",
+  "description": "Apple 中国到店库存网页监控 · Cloudflare Workers + Durable Objects",
   "type": "module",
   "main": "src/index.js",
   "scripts": {

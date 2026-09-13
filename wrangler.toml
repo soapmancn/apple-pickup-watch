@@ -2,10 +2,7 @@ name = "apple-pickup-watch"
 main = "src/index.js"
 compatibility_date = "2026-09-01"
 
-# Preserve variables edited in Cloudflare Dashboard across Git deployments.
-keep_vars = true
-
-# Wake every minute; CHECK_INTERVAL_MINUTES controls real query frequency.
+# Cron is only a watchdog; Durable Object Alarm handles second-level checks.
 [triggers]
 crons = ["* * * * *"]
 
