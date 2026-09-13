@@ -190,12 +190,21 @@ export async function searchStores(query, fetchImpl = fetch) {
 // --- Parsing helpers ---------------------------------------------------
 
 function parseFamilyProducts(html, slug) {
-  const regex = /<a\s+href="https:\/\/www\.apple\.com\.cn\/shop\/buy-iphone\/[^"]+\/([A-Z0-9]{6,12}CH\/A)"[^>]*data-slot-name="productSelection"[^>]*>([\s\S]*?)<\/a>/gi;
+  // Apple buy-iphone family pages embed every SKU as
+  //   <a href=".../buy-iphone/<family>/<PART>/a"
+  //      data-slot-name="productSelection" ...>
+  //     <span class="dimensionCapacity">512<small>GB</small>...</span>
+  //     <span class="dimensionColor">黑色</span>
+  //     <span class="current_price">RMB ...</span>
+  //   </a>
+  // Part numbers are normally uppercase in the URL but we also accept
+  // lowercase to be defensive against Apple changing the casing.
+  const regex = /<a\s+href="https:\/\/www\.apple\.com\.cn\/shop\/buy-iphone\/[^"]+\/([a-z0-9]{6,12}ch\/a)"[^>]*data-slot-name="productSelection"[^>]*>([\s\S]*?)<\/a>/gi;
   const products = [];
   const seen = new Set();
   let match;
   while ((match = regex.exec(html)) !== null) {
-    const partNumber = match[1];
+    const partNumber = match[1].toUpperCase();
     if (seen.has(partNumber)) continue;
     const block = match[2];
     const capacity = cleanCapacity(extractSpan(block, 'dimensionCapacity'));

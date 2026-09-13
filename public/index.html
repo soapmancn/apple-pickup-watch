@@ -201,6 +201,16 @@
       border: 1px solid var(--border); border-radius: 10px; font-size: 12px;
       color: var(--muted); margin-right: 4px;
     }
+    .picker-list:empty + .picker-manual { margin-top: 0; }
+    .picker-manual { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); }
+    .picker-manual-label { display: block; color: var(--muted); font-size: 11px; margin-bottom: 4px; }
+    .picker-manual input {
+      width: 100%; background: var(--card); color: var(--fg);
+      border: 1px solid var(--border); border-radius: 6px;
+      padding: 7px 9px; font-size: 12px; outline: none;
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+    }
+    .picker-manual input:focus { border-color: var(--accent); }
     .selected-list { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
     .selected-list:empty { display: none; }
     .settings-message { color: var(--muted); font-size: 12px; }
@@ -262,6 +272,10 @@
           </div>
           <input type="search" id="product-search" placeholder="搜索 iPhone 17 Pro、512GB、酒红色…" autocomplete="off">
           <div class="picker-list" id="product-picker-list"></div>
+          <div class="picker-manual">
+            <label class="picker-manual-label" for="manual-part-input">也可直接输入 Apple part_number（多个用空格 / 逗号分隔，例如 <code>MJY84CH/A MJYD4CH/A</code>）</label>
+            <input id="manual-part-input" type="text" placeholder="MJY84CH/A MJYD4CH/A ..." autocomplete="off">
+          </div>
           <div class="selected-list" id="product-selected-list"></div>
         </div>
 
@@ -273,6 +287,10 @@
           </div>
           <input type="search" id="store-search" placeholder="输入城市、邮编或地址" autocomplete="off">
           <div class="picker-list" id="store-picker-list"></div>
+          <div class="picker-manual">
+            <label class="picker-manual-label" for="manual-store-input">也可直接输入 Apple store_number（多个用空格 / 逗号分隔，例如 <code>R761 R484 R793</code>）</label>
+            <input id="manual-store-input" type="text" placeholder="R761 R484 R793 ..." autocomplete="off">
+          </div>
           <div class="selected-list" id="store-selected-list"></div>
         </div>
 
@@ -346,6 +364,8 @@
   const storePickerStatus = document.getElementById('store-picker-status');
   const storeRefreshBtn = document.getElementById('store-refresh-btn');
   const storeSelectedList = document.getElementById('store-selected-list');
+  const manualPartInput = document.getElementById('manual-part-input');
+  const manualStoreInput = document.getElementById('manual-store-input');
 
   let settingsDirty = false;
   let settingsLoaded = false;
@@ -459,10 +479,12 @@
     productFilterText = '';
     productSearch.value = '';
     renderProductPicker(products, selectedProducts, productFilterText);
+    syncManualPartInput(selectedProducts);
 
     if (storeSearch.value !== settings.location) storeSearch.value = settings.location;
     storeFilterText = settings.location || '';
     renderStorePicker(stores, selectedStores, storeFilterText);
+    syncManualStoreInput(selectedStores);
 
     settingsLoaded = true;
   }
@@ -625,11 +647,52 @@
   }
 
   function readSelectedProducts() {
-    return new Set([...document.querySelectorAll('input[data-kind="product"]:checked')].map((i) => i.dataset.partNumber));
+    const ticked = new Set([...document.querySelectorAll('input[data-kind="product"]:checked')].map((i) => i.dataset.partNumber));
+    for (const value of parseManualTokens(manualPartInput.value)) ticked.add(value);
+    return ticked;
   }
   function readSelectedStores() {
-    return new Set([...document.querySelectorAll('input[data-kind="store"]:checked')].map((i) => i.dataset.storeNumber));
+    const ticked = new Set([...document.querySelectorAll('input[data-kind="store"]:checked')].map((i) => i.dataset.storeNumber));
+    for (const value of parseManualTokens(manualStoreInput.value)) ticked.add(value);
+    return ticked;
   }
+
+  function parseManualTokens(raw) {
+    return String(raw || '')
+      .split(/[\s,，;；]+/)
+      .map((v) => v.trim().toUpperCase())
+      .filter(Boolean);
+  }
+
+  function syncManualPartInput(selected) {
+    const manual = parseManualTokens(manualPartInput.value);
+    const missing = manual.filter((v) => !productCatalogue.some((p) => p.part_number === v));
+    if (missing.length) manualPartInput.value = manual.join(' ');
+    const catalogueSelected = [...selected].filter((pn) => productCatalogue.some((p) => p.part_number === pn));
+    if (catalogueSelected.length && !manual.length) {
+      // Don't auto-fill the manual box with catalogue values; users use it
+      // for unknown parts only. But keep a hint in placeholder if needed.
+    }
+  }
+
+  function syncManualStoreInput(selected) {
+    const manual = parseManualTokens(manualStoreInput.value);
+    const missing = manual.filter((v) => !storeCatalogue.some((s) => s.store_number === v));
+    if (missing.length) manualPartInput; // noop placeholder
+  }
+
+  manualPartInput.addEventListener('input', () => {
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+    renderProductPicker(productCatalogue, readSelectedProducts(), productFilterText);
+  });
+  manualStoreInput.addEventListener('input', () => {
+    settingsDirty = true;
+    settingsMessage.textContent = '有未保存的修改';
+    settingsMessage.className = 'settings-message';
+    renderStorePicker(storeCatalogue, readSelectedStores(), storeFilterText);
+  });
 
   async function bootstrapCatalogue() {
     // Trigger a one-time refresh so the dashboard is populated even on cold
