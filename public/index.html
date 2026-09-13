@@ -578,9 +578,10 @@
     const set = new Set();
     for (const regionId of enabledRegions) {
       const rs = regions[regionId]?.settings || {};
-      for (const pn of (rs.part_numbers || [])) set.add(pn);
+      for (const pn of (rs.part_numbers || [])) {
+        if (!tombstonedParts.has(pn)) set.add(pn);
+      }
     }
-    for (const v of parseManualTokens(manualPartInput.value)) set.add(v);
     return set;
   }
 
@@ -588,9 +589,10 @@
     const set = new Set();
     for (const regionId of enabledRegions) {
       const rs = regions[regionId]?.settings || {};
-      for (const sn of (rs.store_numbers || [])) set.add(sn);
+      for (const sn of (rs.store_numbers || [])) {
+        if (!tombstonedStores.has(sn)) set.add(sn);
+      }
     }
-    for (const v of parseManualTokens(manualStoreInput.value)) set.add(v);
     return set;
   }
 
@@ -613,6 +615,8 @@
 
     const byRegionCatalog = data?.catalog?.byRegion || {};
     enabledRegions = new Set();
+    tombstonedParts.clear();
+    tombstonedStores.clear();
     for (const regionId of Object.keys(regions)) {
       const bucket = byRegionCatalog[regionId] || {};
       regions[regionId].products = Array.isArray(bucket.products) ? bucket.products : [];
@@ -676,8 +680,17 @@
         storeCatalogue.push({ ...s, region: s.region || regionId });
       }
     }
+    // Combine persisted selections with the manual input text so the
+    // user sees the current proposed set in one place.  Tombstones drop
+    // items they just unchecked from a manual row.
     const selectedProducts = allSelectedProducts();
+    for (const token of parseManualTokens(manualPartInput.value)) {
+      if (!tombstonedParts.has(token)) selectedProducts.add(token);
+    }
     const selectedStores = allSelectedStores();
+    for (const token of parseManualTokens(manualStoreInput.value)) {
+      if (!tombstonedStores.has(token)) selectedStores.add(token);
+    }
     renderProductPicker(productCatalogue, selectedProducts, productFilterText);
     renderStorePicker(storeCatalogue, selectedStores, storeFilterText);
     if (!productPickerStatus.dataset.touched) {
@@ -700,19 +713,27 @@
 
   let productFilterText = '';
   let storeFilterText = '';
+  // Tokens the user has *explicitly cancelled* from the manual input box
+  // since the last save — kept so the picker won't re-add them on every
+  // re-render.  Cleared whenever the user adds a fresh token or saves.
+  let tombstonedParts = new Set();
+  let tombstonedStores = new Set();
 
   // Merge `selected` (the user's picks — which may include manually-typed
   // part/store numbers that don't exist in the catalogue yet) into the
-  // catalogue so they always show up with a checkable row.
-  function augmentCatalogue(all, selected, fallbackType) {
+  // catalogue so they always show up with a checkable row.  Manual input
+  // box values are merged too — but tombstones (items the user just
+  // unchecked from a manual-input row) are filtered out so cancellation
+  // actually persists.
+  function augmentCatalogue(all, selected, fallbackType, tombstones) {
     const set = new Set(all.map((entry) => entry.part_number || entry.store_number));
-    const stub = { manual: true };
+    const isTombstoned = (v) => tombstones && tombstones.has(v);
     for (const value of selected) {
-      if (!set.has(value)) {
+      if (!set.has(value) && !isTombstoned(value)) {
         if (fallbackType === 'product') {
-          all.push({ part_number: value, model: '手动输入 SKU', capacity: '', color: '', purchase_url: '', _manual: true });
+          all.push({ part_number: value, model: '已保存 SKU', capacity: '', color: '', purchase_url: '', _saved: true });
         } else {
-          all.push({ store_number: value, store_name: value, city: '', state: '', address: '', _manual: true });
+          all.push({ store_number: value, store_name: value, city: '', state: '', address: '', _saved: true });
         }
       }
     }
@@ -736,12 +757,12 @@
       productPickerList.innerHTML = '<div class="picker-empty">没有匹配项，输入关键字搜索。</div>';
     } else {
       productPickerList.innerHTML = filtered.map((p) => `
-        <label class="picker-item ${p._manual ? 'manual' : ''}">
+        <label class="picker-item ${p._saved ? 'manual' : ''}">
           <input type="checkbox" data-part-number="${escapeHtml(p.part_number)}" data-kind="product" ${selected.has(p.part_number) ? 'checked' : ''}>
           <span>
             <span class="picker-region-label ${p.region || 'cn'}">${p.region === 'hk' ? '港' : '大陆'}</span>
             <strong>${escapeHtml(p.model || '手动输入 SKU')}</strong> · ${escapeHtml(p.capacity || '')}
-            <span class="sub">${escapeHtml(p.color || '')} · ${escapeHtml(p.part_number)}${p._manual ? ' · 手动' : ''}</span>
+            <span class="sub">${escapeHtml(p.color || '')} · ${escapeHtml(p.part_number)}${p._saved ? ' · 手动' : ''}</span>
           </span>
         </label>`).join('');
     }
@@ -775,12 +796,12 @@
       storePickerList.innerHTML = '<div class="picker-empty">没有匹配项，试试别的关键字。</div>';
     } else {
       storePickerList.innerHTML = filtered.map((s) => `
-        <label class="picker-item ${s._manual ? 'manual' : ''}">
+        <label class="picker-item ${s._saved ? 'manual' : ''}">
           <input type="checkbox" data-store-number="${escapeHtml(s.store_number)}" data-kind="store" ${selected.has(s.store_number) ? 'checked' : ''}>
           <span>
             <span class="picker-region-label ${s.region || 'cn'}">${s.region === 'hk' ? '港' : '大陆'}</span>
             <strong>${escapeHtml(s.store_name)}</strong>
-            <span class="sub">${escapeHtml(s.city || '')} · ${escapeHtml(s.store_number)}${s._manual ? ' · 手动' : ''}</span>
+            <span class="sub">${escapeHtml(s.city || '')} · ${escapeHtml(s.store_number)}${s._saved ? ' · 手动' : ''}</span>
           </span>
         </label>`).join('');
     }
@@ -813,13 +834,36 @@
     settingsMessage.className = 'settings-message';
   });
 
-  productPickerList.addEventListener('change', () => {
+  productPickerList.addEventListener('change', (ev) => {
+    const target = ev.target;
+    if (target?.matches('input[type="checkbox"][data-kind="product"]')) {
+      const part = target.dataset.partNumber;
+      // Detect whether the row came from the manual input box (catalogue
+      // didn't have it).  If so, tombstones the value so it stays cancelled
+      // until the user re-types or saves.
+      const isManual = part && parseManualTokens(manualPartInput.value).includes(part);
+      if (!target.checked && isManual) {
+        tombstonedParts.add(part);
+      } else if (target.checked && isManual) {
+        tombstonedParts.delete(part);
+      }
+    }
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
     renderPicker();
   });
-  storePickerList.addEventListener('change', () => {
+  storePickerList.addEventListener('change', (ev) => {
+    const target = ev.target;
+    if (target?.matches('input[type="checkbox"][data-kind="store"]')) {
+      const store = target.dataset.storeNumber;
+      const isManual = store && parseManualTokens(manualStoreInput.value).includes(store);
+      if (!target.checked && isManual) {
+        tombstonedStores.add(store);
+      } else if (target.checked && isManual) {
+        tombstonedStores.delete(store);
+      }
+    }
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
@@ -921,14 +965,10 @@
   }
 
   function readSelectedProducts() {
-    const ticked = new Set([...document.querySelectorAll('input[data-kind="product"]:checked')].map((i) => i.dataset.partNumber));
-    for (const value of parseManualTokens(manualPartInput.value)) ticked.add(value);
-    return ticked;
+    return new Set([...document.querySelectorAll('input[data-kind="product"]:checked')].map((i) => i.dataset.partNumber));
   }
   function readSelectedStores() {
-    const ticked = new Set([...document.querySelectorAll('input[data-kind="store"]:checked')].map((i) => i.dataset.storeNumber));
-    for (const value of parseManualTokens(manualStoreInput.value)) ticked.add(value);
-    return ticked;
+    return new Set([...document.querySelectorAll('input[data-kind="store"]:checked')].map((i) => i.dataset.storeNumber));
   }
 
   function parseManualTokens(raw) {
@@ -939,12 +979,15 @@
   }
 
   manualPartInput.addEventListener('input', () => {
+    // Re-typing or adding tokens clears tombstones for the same values.
+    for (const token of parseManualTokens(manualPartInput.value)) tombstonedParts.delete(token);
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
     renderPicker();
   });
   manualStoreInput.addEventListener('input', () => {
+    for (const token of parseManualTokens(manualStoreInput.value)) tombstonedStores.delete(token);
     settingsDirty = true;
     settingsMessage.textContent = '有未保存的修改';
     settingsMessage.className = 'settings-message';
@@ -952,18 +995,41 @@
   });
 
   async function bootstrapCatalogue() {
+    // On cold open we want SOMETHING to show in the picker even if the
+    // worker-to-Apple HTTPS is being throttled.  Try multiple query
+    // variants per region in order of likelihood to return popular SKUs.
+    const regionQueries = {
+      cn: ['', 'iPhone 18', 'iPhone 17', 'iPhone Air'],
+      hk: ['', 'iPhone 18', 'iPhone 17', 'iPhone Air'],
+    };
     try {
-      await Promise.allSettled([
-        fetch('/api/catalog', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            products: true,
-            stores: true,
-            locations: { cn: '518000', hk: '中環' },
-          }),
-        }),
-      ]);
+      for (const regionId of Object.keys(regions)) {
+        if (!enabledRegions.has(regionId)) continue;
+        const queries = regionQueries[regionId] || [''];
+        for (const q of queries) {
+          const params = new URLSearchParams({ region: regionId });
+          if (q) params.set('q', q);
+          try {
+            const res = await fetch(`/api/search/products?${params.toString()}`);
+            const json = await res.json().catch(() => ({}));
+            if (res.ok && json.ok && Array.isArray(json.products) && json.products.length) {
+              regions[regionId].products = json.products;
+              break;
+            }
+          } catch (err) { /* ignore */ }
+        }
+      }
+      // Trigger a background catalog refresh for stores too.
+      for (const regionId of Object.keys(regions)) {
+        if (!enabledRegions.has(regionId)) continue;
+        try {
+          const params = new URLSearchParams({ region: regionId });
+          params.set('q', regionId === 'hk' ? '中環' : '518000');
+          await fetch(`/api/search/stores?${params.toString()}`);
+        } catch (err) { /* ignore */ }
+      }
+      // Re-render picker with whatever we got.
+      renderPicker();
     } catch (err) { /* noop */ }
   }
 
@@ -1078,6 +1144,9 @@
       settingsMessage.className = 'settings-message ok';
       const regionSummary = enabledRegions.map((id) => regions[id].label).join(' + ');
       showToast('设置已保存', `${regionSummary} · 每 ${result.settings.interval_seconds} 秒`);
+      // Saved values are now in settings; clear tombstones.
+      tombstonedParts.clear();
+      tombstonedStores.clear();
       await fetchState();
       await fetchLog();
     } catch (err) {

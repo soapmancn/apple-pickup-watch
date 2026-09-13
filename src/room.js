@@ -258,7 +258,13 @@ export class Room {
       const products = await searchProducts(region, query);
       return Response.json({ ok: true, region, query, products });
     } catch (err) {
-      return Response.json({ ok: false, error: String(err.message || err) }, { status: 502 });
+      // Soft-fail for Apple-side errors: still return an empty list so the
+      // dashboard can fall back to its built-in seeds instead of erroring.
+      const message = String(err.message || err);
+      if (/HTTP\s*403|HTTP\s*541|failed to fetch/.test(message)) {
+        return Response.json({ ok: true, region, query, products: [], warning: message.slice(0, 200) });
+      }
+      return Response.json({ ok: false, error: message.slice(0, 200) }, { status: 502 });
     }
   }
 
@@ -276,7 +282,11 @@ export class Room {
       await this.state.storage.put(CATALOG_KEY, this.catalogue);
       return Response.json({ ok: true, region, query, stores });
     } catch (err) {
-      return Response.json({ ok: false, error: String(err.message || err) }, { status: 502 });
+      const message = String(err.message || err);
+      if (/HTTP\s*403|HTTP\s*541|failed to fetch/.test(message)) {
+        return Response.json({ ok: true, region, query, stores: [], warning: message.slice(0, 200) });
+      }
+      return Response.json({ ok: false, error: message.slice(0, 200) }, { status: 502 });
     }
   }
 

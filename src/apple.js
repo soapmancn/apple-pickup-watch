@@ -131,13 +131,20 @@ export async function fetchAllFamilyProducts(regionId, fetchImpl = fetch) {
   const region = getRegion(regionId);
   if (!region) throw new Error(`unknown region ${regionId}`);
   const all = [];
+  let lastError = null;
   for (const slug of region.family_slugs) {
     try {
       const items = await fetchFamilyProducts(regionId, slug, fetchImpl);
       for (const item of items) all.push(item);
     } catch (err) {
+      lastError = err;
       console.warn(`skip ${regionId}/${slug}`, err.message || err);
     }
+  }
+  if (!all.length && lastError) {
+    // Surface the most useful error to the caller so soft-fail in Room
+    // can detect Apple-throttling patterns.
+    throw lastError;
   }
   return all;
 }
@@ -168,6 +175,20 @@ export async function fetchAppleStores(regionId, location, fetchImpl = fetch) {
   for (const store of stores) storesByNumber.set(`${regionId}|${store.store_number}`, store);
   storeCache.set(cacheKey, { stores, expiresAt: now + STORE_TTL_MS });
   return stores;
+}
+
+/**
+ * Like `fetchAppleStores` but returns an empty array on Apple-side errors
+ * (403/541/etc.) so the dashboard can fall back to its built-in seed
+ * list without surfacing an error banner.
+ */
+export async function fetchAppleStoresSafe(regionId, location, fetchImpl = fetch) {
+  try {
+    return await fetchAppleStores(regionId, location, fetchImpl);
+  } catch (err) {
+    if (!/HTTP\s*403|HTTP\s*541|failed to fetch/.test(String(err.message || err))) throw err;
+    return [];
+  }
 }
 
 export function getKnownStore(regionId, storeNumber) {
