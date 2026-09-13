@@ -18,15 +18,14 @@ iPhone 18 Pro Max 深圳三家 Apple Store 到店库存监控，部署在 Cloudf
 
 > 想跳过本地环境直接部署？点下面按钮，从 GitHub 一键导入到 Cloudflare Workers：
 >
-> [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://github.com/soapmancn/apple-pickup-watch)
+> [![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https%3A%2F%2Fgithub.com%2Fsoapmancn%2Fapple-pickup-watch)
 >
-> 按钮会打开本仓库 GitHub 页。从那里点 README 里的步骤，或者直接：
+> 点击后会跳转到 Cloudflare Workers 的创建和部署流程，并带入仓库 `soapmancn/apple-pickup-watch`。登录 Cloudflare、授权 GitHub 后确认：
 >
-> 1. 打开 https://dash.cloudflare.com/?to=%2F%3Aaccount%2Fworkers-and-pages%2Fcreate
-> 2. 点 **Continue with GitHub** → 授权 soapmancn 账号
-> 3. 选 **从现有存储库部署**（或类似选项）→ 选 `soapmancn/apple-pickup-watch`
-> 4. 项目名 `apple-pickup-watch`，构建命令留空，**部署命令填 `npx wrangler deploy`**
-> 5. 点 **部署**，Cloudflare 会跑 `bun install + npx wrangler deploy`
+> - 仓库：`soapmancn/apple-pickup-watch`
+> - 项目名称：`apple-pickup-watch`
+> - 构建命令：留空
+> - 部署命令：`npx wrangler deploy`
 
 #### 或者本地手动部署
 

@@ -1,31 +1,18 @@
 /**
  * Durable Object: "Room" — singleton holding:
- *   - the latest observation snapshot (kept in memory, never written to
- *     storage so a cold start after Workers eviction shows "starting"
- *     until the next cron tick fires within 2 min)
- *   - the previous-available set (for edge-trigger diff)
+ *   - latest observations and previous-available state in durable storage
  *   - a bounded log buffer of recent tick events
- *   - a set of active SSE subscribers (controllers) so we can broadcast
- *     newly-available hits to every connected browser tab in real time.
- *
- * Endpoints handled via internal Request:
- *   GET  /state      → full JSON snapshot
- *   GET  /log        → bounded log (newest first)
- *   GET  /stream     → SSE subscription (long-lived)
- *   POST /tick       → cron-fetch result ingestion; computes diff +
- *                       broadcasts SSE "new-available" event
- *   POST /test-stock → admin: forge a synthetic available hit (for demos)
+ *   - active SSE subscribers for live browser notifications
  */
 
 const LOG_MAX = 100;
+const STORAGE_KEY = 'monitor-state-v1';
 
 export class Room {
   constructor(state, env) {
-    this.state = state;          // DurableObjectState
+    this.state = state;
     this.env = env;
-    /** @type {Array<{ts:string,level:string,msg:string}>} */
     this.log = [];
-    /** @type {string[]} */
     this.previousAvailable = [];
     this.lastCheckedAt = null;
     this.lastAttemptAt = null;
@@ -34,8 +21,21 @@ export class Room {
     this.status = 'starting';
     this.observations = [];
     this.failCount = 0;
-    /** @type {Set<ReadableStreamDefaultController>} */
+    this.lastError = null;
     this.subscribers = new Set();
+
+    state.blockConcurrencyWhile(async () => {
+      const saved = await state.storage.get(STORAGE_KEY);
+      if (!saved) return;
+      this.log = saved.log || [];
+      this.previousAvailable = saved.previousAvailable || [];
+      this.lastCheckedAt = saved.lastCheckedAt || null;
+      this.lastAttemptAt = saved.lastAttemptAt || null;
+      this.status = saved.status || 'starting';
+      this.observations = saved.observations || [];
+      this.failCount = saved.failCount || 0;
+      this.lastError = saved.lastError || null;
+    });
   }
 
   async fetch(request) {
@@ -125,11 +125,23 @@ export class Room {
 
   async handleTick(payload) {
     this.lastAttemptAt = nowCst();
-    this.observations = payload.observations || [];
     this.failCount = payload.fail_count || 0;
-    this.status = this.failCount > 0 && this.failCount >= STORES.length ? 'query_failed' : 'ok';
-    this.lastError = this.status === 'query_failed' ? `${this.failCount}/${STORES.length} stores failed` : null;
     this.lastCheckedAt = payload.checked_at || this.lastAttemptAt;
+
+    if (this.failCount >= STORES.length) {
+      this.status = 'query_failed';
+      this.lastError = payload.error || `${this.failCount}/${STORES.length} stores failed`;
+      this.appendLog('fail', `tick 失败 · ${this.lastError}`);
+      await this.persist();
+      for (const c of this.subscribers) {
+        this.safeEnqueue(c, 'state', { checked_at: this.lastCheckedAt });
+      }
+      return new Response('query failed', { status: 502 });
+    }
+
+    this.status = 'ok';
+    this.lastError = null;
+    this.observations = payload.observations || [];
 
     const currentSet = new Set(this.currentAvailable());
     const previousSet = new Set(this.previousAvailable);
@@ -143,9 +155,9 @@ export class Room {
       (availDetail ? `（${availDetail}）` : '') +
       ` · 新增 ${newlyAvailable.length} 个` +
       (newDetail ? `（${newDetail}）` : '') +
-      ` · 监控 ${this.observations.length} 个观察点` +
-      (this.failCount ? ` · 失败 ${this.failCount}/${STORES.length} 家门店` : '');
+      ` · 监控 ${this.observations.length} 个观察点`;
     this.appendLog('ok', msg);
+    await this.persist();
 
     // Broadcast to all open browsers.
     if (newlyAvailable.length > 0) {
@@ -201,6 +213,19 @@ export class Room {
     return this.observations
       .filter((o) => o.pickup_display === 'available')
       .map((o) => `${o.part_number}|${o.store_number}`);
+  }
+
+  async persist() {
+    await this.state.storage.put(STORAGE_KEY, {
+      log: this.log,
+      previousAvailable: this.previousAvailable,
+      lastCheckedAt: this.lastCheckedAt,
+      lastAttemptAt: this.lastAttemptAt,
+      status: this.status,
+      observations: this.observations,
+      failCount: this.failCount,
+      lastError: this.lastError,
+    });
   }
 
   appendLog(level, msg) {

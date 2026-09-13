@@ -88,8 +88,7 @@ export default {
   },
 
   /**
-   * Cron trigger — runs every 2 minutes (cron "*/2 * * * *"). Above the
-   * 30s rate-limit threshold we hit when scraping from one residential IP.
+   * Cron trigger — runs every 2 minutes.
    */
   async scheduled(event, env, ctx) {
     ctx.waitUntil(runTick(env));
@@ -97,106 +96,114 @@ export default {
 };
 
 /**
- * Fetch the current pickup availability for all parts × stores, then
- * hand the result to the Room for diff + broadcast.
+ * Query every selected part in one Apple pickup-message request, then hand
+ * the normalized observations to the Room for state diff and SSE broadcast.
  */
 async function runTick(env) {
   const id = env.ROOM.idFromName('singleton');
   const room = env.ROOM.get(id);
-
-  const observations = [];
-  let okCount = 0;
-  let failCount = 0;
-
-  for (const storeId of STORES) {
-    try {
-      const list = await fetchPartList(storeId);
-      for (const part of PARTS) {
-        const hit = list.find((x) => x.part_number === part);
-        if (hit) {
-          observations.push({
-            part_number: part,
-            store_number: storeId,
-            store_name: STORE_INFO[storeId].store_name,
-            city: '深圳',
-            pickup_display: hit.pickup_display,
-            pickup_quote: hit.pickup_quote,
-            pickup_quote_value: hit.pickup_quote_value ?? null,
-          });
-        }
-        okCount++;
-      }
-    } catch (err) {
-      failCount++;
-      observations.push({
-        part_number: '*',
-        store_number: storeId,
-        store_name: STORE_INFO[storeId].store_name,
-        city: '深圳',
-        pickup_display: 'unavailable',
-        pickup_quote: `查询失败: ${(err && err.message) || err}`.slice(0, 80),
-        pickup_quote_value: null,
-        _error: true,
-      });
-    }
-  }
-
   const checkedAt = formatCst(new Date());
-  await room.fetch(new Request('https://room/tick', {
-    method: 'POST',
-    body: JSON.stringify({
-      checked_at: checkedAt,
-      observations,
-      fail_count: failCount,
-      ok_count: okCount,
-    }),
-  }));
+
+  try {
+    const observations = await fetchPickupObservations();
+    await room.fetch(new Request('https://room/tick', {
+      method: 'POST',
+      body: JSON.stringify({
+        checked_at: checkedAt,
+        observations,
+        fail_count: 0,
+        ok_count: observations.length,
+      }),
+    }));
+  } catch (err) {
+    await room.fetch(new Request('https://room/tick', {
+      method: 'POST',
+      body: JSON.stringify({
+        checked_at: checkedAt,
+        observations: [],
+        fail_count: STORES.length,
+        ok_count: 0,
+        error: String((err && err.message) || err).slice(0, 300),
+      }),
+    }));
+  }
 }
 
 /**
- * Hit the Apple pickup-message endpoint for one store and parse the
- * JSON response. Each store has its own list of (part, pickup_display).
+ * Apple expects `pl=true`, `location`, and indexed `mts.N` / `parts.N`
+ * query parameters. Its response contains nearby stores; select only the
+ * configured Shenzhen stores and normalize `partsAvailability`.
  */
-async function fetchPartList(storeId) {
-  const url = `${PICKUP_URL}?store=${encodeURIComponent(storeId)}&location=${encodeURIComponent(LOCATION)}`;
-  const r = await fetch(url, {
+async function fetchPickupObservations() {
+  const params = new URLSearchParams({ pl: 'true', location: LOCATION });
+  PARTS.forEach((part, index) => {
+    params.set(`mts.${index}`, 'regular');
+    params.set(`parts.${index}`, part);
+  });
+
+  const r = await fetch(`${PICKUP_URL}?${params.toString()}`, {
     headers: {
       'User-Agent': 'Mozilla/5.0 AppleCNInventoryMonitor/Workers',
       'Accept': 'application/json,text/plain,*/*',
       'Referer': SOURCE_URL,
     },
-    cf: {
-      // Cache at the edge for 30s only — Apple updates every few minutes,
-      // and we don't want stale data when a tab opens.
-      cacheTtl: 30,
-      cacheEverything: false,
-    },
+    cf: { cacheTtl: 0, cacheEverything: false },
   });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  const text = await r.text();
-  const data = JSON.parse(text);
-  if (!data || !Array.isArray(data.body) || !Array.isArray(data.body.stores)) {
-    // Some endpoints return { stores: [{ parts: [...] }] } — try that shape.
-    const stores = (data && data.stores) || [];
-    if (stores.length && Array.isArray(stores[0].parts)) {
-      return stores[0].parts.map((p) => ({
-        part_number: p.partNumber || p.part_number,
-        pickup_display: p.pickupDisplay || p.pickup_display || 'unavailable',
-        pickup_quote: p.pickupQuote || p.pickup_quote || '暂无供应',
-        pickup_quote_value: p.pickupQuoteValue ?? p.pickup_quote_value ?? null,
-      }));
-    }
-    throw new Error('unexpected response shape');
+  if (!r.ok) throw new Error(`Apple pickup API returned HTTP ${r.status}`);
+
+  const data = await r.json();
+  const body = data && data.body;
+  if (!body || !Array.isArray(body.stores)) {
+    throw new Error('Apple pickup API returned an unexpected response shape');
   }
-  const storeBlock = data.body.stores.find((s) => s.storeNumber === storeId || s.store_number === storeId);
-  if (!storeBlock) throw new Error('store not in response');
-  const parts = storeBlock.parts || storeBlock.partList || [];
-  return parts.map((p) => ({
-    part_number: p.partNumber || p.part_number,
-    pickup_display: p.pickupDisplay || p.pickup_display || 'unavailable',
-    pickup_quote: p.pickupQuote || p.pickup_quote || '暂无供应',
-    pickup_quote_value: p.pickupQuoteValue ?? p.pickup_quote_value ?? null,
-  }));
+  if (body.errorMessage) throw new Error(stripMarkup(body.errorMessage));
+
+  const byNumber = new Map(
+    body.stores
+      .filter((store) => store && store.storeNumber)
+      .map((store) => [store.storeNumber, store]),
+  );
+  const missingStores = STORES.filter((store) => !byNumber.has(store));
+  if (missingStores.length) {
+    throw new Error(`Selected stores missing from Apple response: ${missingStores.join(', ')}`);
+  }
+
+  const observations = [];
+  const missingPairs = [];
+  for (const storeNumber of STORES) {
+    const store = byNumber.get(storeNumber);
+    const availability = store.partsAvailability || {};
+    for (const part of PARTS) {
+      const item = availability[part];
+      const display = item && item.pickupDisplay;
+      if (!item || !['available', 'unavailable', 'ineligible'].includes(display)) {
+        missingPairs.push(`${part}@${storeNumber}`);
+        continue;
+      }
+      observations.push({
+        part_number: part,
+        store_number: storeNumber,
+        store_name: String(store.storeName || STORE_INFO[storeNumber].store_name).trim(),
+        city: store.city || '深圳',
+        pickup_display: display,
+        pickup_quote: stripMarkup(item.pickupSearchQuote || ''),
+        pickup_quote_value: item.pickupSearchQuoteValue ?? null,
+      });
+    }
+  }
+  if (missingPairs.length) {
+    throw new Error(`Incomplete Apple availability response: ${missingPairs.slice(0, 8).join(', ')}`);
+  }
+  return observations;
+}
+
+function stripMarkup(value) {
+  return String(value || '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 function formatCst(d) {
